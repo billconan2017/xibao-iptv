@@ -1,0 +1,15 @@
+# 清和IPTV - Docker Compose 部署
+# 使用方式：
+#   1. 将本文件放在服务器上
+#   2. docker compose up -d
+#   3. 访问 http://服务器IP:8080 下载 APK
+
+services:
+  qinghe-iptv:
+    image: ghcr.io/你的用户名/qinghe-iptv:latest  # ← 替换为你的 Docker Hub
+    container_name: qinghe-iptv
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./config:/config
