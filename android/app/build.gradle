@@ -1,10 +1,10 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace = "com.qinghe.iptv"
+    namespace = "com.xibao.iptv"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.qinghe.iptv"
+        applicationId "com.xibao.iptv"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

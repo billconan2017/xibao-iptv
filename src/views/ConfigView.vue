@@ -1,7 +1,7 @@
 <template>
   <div class="config-screen">
     <div class="config-card">
-      <h1 class="logo">📺 清和IPTV</h1>
+      <h1 class="logo">📺 喜宝IPTV</h1>
       <p class="subtitle">开源 IPTV 播放器 · 手机/电视通用</p>
 
       <div class="input-group">

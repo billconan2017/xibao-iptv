@@ -1,10 +1,10 @@
-# 清和IPTV - 群晖 Docker 部署
+# 喜宝IPTV - 群晖 Docker 部署
 #
 # 使用方式：
-#   1. 群晖文件管理器创建目录 /docker/qinghe-iptv
+#   1. 群晖文件管理器创建目录 /docker/xibao-iptv
 #   2. 把本文件放进去
 #   3. SSH 执行:
-#      cd /volume1/docker/qinghe-iptv
+#      cd /volume1/docker/xibao-iptv
 #      docker compose up -d
 #   4. 访问 http://群晖IP:8080 下载 APK
 #
@@ -12,9 +12,9 @@
 # APP 第一次打开时输入你的服务器地址即可使用
 
 services:
-  qinghe-iptv:
-    image: nginx:alpine
-    container_name: qinghe-iptv
+  xibao-iptv:
+    image: billcoann/xibao-iptv:latest
+    container_name: xibao-iptv
     restart: unless-stopped
     ports:
       - "8080:80"
@@ -23,13 +23,13 @@ services:
     # 启动后自动从 GitHub Release 下载 APK
     command: >
       sh -c "
-        wget -q 'https://github.com/billconan2017/qinghe-iptv/releases/download/v1.0.0/qinghe-iptv-v1.0.0.apk'
-          -O /usr/share/nginx/html/qinghe-iptv.apk &&
+        wget -q 'https://github.com/billconan2017/xibao-iptv/releases/download/v1.0.0/xibao-iptv-v1.0.0.apk'
+          -O /usr/share/nginx/html/xibao-iptv.apk &&
         echo '<!DOCTYPE html>
       <html lang=\"zh-CN\">
       <head><meta charset=\"UTF-8\">
       <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-      <title>清和IPTV 下载</title>
+      <title>喜宝IPTV 下载</title>
       <style>
         body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a0a;color:#fff;
         display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -45,9 +45,9 @@ services:
         background:#111;border-radius:8px}
       </style></head>
       <body><div class=\"card\">
-        <h1 class=\"logo\">📺 清和IPTV</h1>
+        <h1 class=\"logo\">📺 喜宝IPTV</h1>
         <p class=\"sub\">开源 IPTV 播放器 · 手机/电视通用</p>
-        <a class=\"btn\" href=\"/qinghe-iptv.apk\" download>📥 下载 APK</a>
+        <a class=\"btn\" href=\"/xibao-iptv.apk\" download>📥 下载 APK</a>
         <div class=\"step\">
           <strong>安装后配置：</strong><br>
           1. 安装 APK<br>
@@ -58,7 +58,7 @@ services:
         <p class=\"info\">
           全架构 arm64-v8a / armeabi-v7a / x86<br>
           minSdk 24 · Capacitor + Vue 3<br>
-          <a href=\"https://github.com/billconan2017/qinghe-iptv\">GitHub 仓库</a>
+          <a href=\"https://github.com/billconan2017/xibao-iptv\">GitHub 仓库</a>
         </p>
       </div></body></html>'
           > /usr/share/nginx/html/index.html &&

@@ -1,4 +1,4 @@
-package com.qinghe.iptv;
+package com.xibao.iptv;
 
 import com.getcapacitor.BridgeActivity;
 

@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">清和IPTV</string>
-    <string name="title_activity_main">清和IPTV</string>
-    <string name="package_name">com.qinghe.iptv</string>
-    <string name="custom_url_scheme">com.qinghe.iptv</string>
+    <string name="app_name">喜宝IPTV</string>
+    <string name="title_activity_main">喜宝IPTV</string>
+    <string name="package_name">com.xibao.iptv</string>
+    <string name="custom_url_scheme">com.xibao.iptv</string>
 </resources>

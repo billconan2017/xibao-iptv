@@ -1,6 +1,6 @@
 {
-  "appId": "com.qinghe.iptv",
-  "appName": "清和IPTV",
+  "appId": "com.xibao.iptv",
+  "appName": "喜宝IPTV",
   "webDir": "dist",
   "server": {
     "androidScheme": "http",

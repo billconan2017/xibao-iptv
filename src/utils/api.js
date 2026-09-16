@@ -1,5 +1,5 @@
-// 清和IPTV API 对接模块
-const STORAGE_KEY = 'qinghe_config'
+// 喜宝IPTV API 对接模块
+const STORAGE_KEY = 'xibao_config'
 
 let config = {
   serverUrl: '',
