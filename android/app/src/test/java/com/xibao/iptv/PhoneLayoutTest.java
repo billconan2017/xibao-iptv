@@ -49,7 +49,11 @@ public class PhoneLayoutTest {
             measure(root,393,830);call(a,"layoutPhone");measure(root,393,830);
             View video=(View)get(a,"playerView"),guide=(View)get(a,"guidePanel"),info=(View)get(a,"infoPanel");
             capture(root,"portrait");
-            assertEquals(393*9/16,video.getHeight());assertTrue(guide.getTop()>=info.getBottom());assertTrue(guide.getHeight()>200);
+            assertEquals(830-160,video.getHeight());assertEquals(video.getBottom(),info.getTop());assertEquals(View.GONE,guide.getVisibility());
+            video.performClick();assertEquals(View.GONE,guide.getVisibility());
+            video.performClick();text((View)get(a,"touchControls"),"频道").performClick();
+            assertEquals(View.VISIBLE,guide.getVisibility());measure(root,393,830);capture(root,"portrait-channels");
+            text(guide,"关闭").performClick();assertEquals(View.GONE,guide.getVisibility());
             capture(root,"portrait");
             Object player=get(a,"player");
             measure(root,830,393);call(a,"layoutPhone");measure(root,830,393);
@@ -63,8 +67,22 @@ public class PhoneLayoutTest {
             video.performClick();assertEquals(View.VISIBLE,((View)get(a,"touchControls")).getVisibility());assertEquals(View.GONE,guide.getVisibility());
             text((View)get(a,"touchControls"),"频道").performClick();assertEquals(View.VISIBLE,guide.getVisibility());
             text(guide,"关闭").performClick();assertEquals(View.GONE,guide.getVisibility());
-            measure(root,393,830);call(a,"layoutPhone");measure(root,393,830);assertEquals(393*9/16,video.getHeight());assertEquals(View.VISIBLE,guide.getVisibility());assertSame(player,get(a,"player"));
+            measure(root,393,830);call(a,"layoutPhone");measure(root,393,830);assertEquals(830-160,video.getHeight());assertEquals(View.GONE,guide.getVisibility());assertSame(player,get(a,"player"));
             assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER,a.getRequestedOrientation());
+            android.provider.Settings.System.putInt(a.getContentResolver(),android.provider.Settings.System.ACCELEROMETER_ROTATION,0);
+            ((View)get(a,"fullscreenButton")).performClick();
+            assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,a.getRequestedOrientation());
+            // A second tap must work even if the first orientation transition has not finished.
+            ((View)get(a,"fullscreenButton")).performClick();
+            assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,a.getRequestedOrientation());
+            set(a,"physicallyPortrait",false);call(a,"restoreAutomaticOrientation");
+            assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,a.getRequestedOrientation());
+            set(a,"physicallyPortrait",true);call(a,"restoreAutomaticOrientation");
+            assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER,a.getRequestedOrientation());
+            ((View)get(a,"fullscreenButton")).performClick();
+            a.getOnBackPressedDispatcher().onBackPressed();
+            assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,a.getRequestedOrientation());
+            assertSame(player,get(a,"player"));assertFalse(a.isFinishing());
             call(a,"showPhonePrograms");androidx.appcompat.app.AlertDialog dialog=(androidx.appcompat.app.AlertDialog)get(a,"programmeDialog");View decor=dialog.getWindow().getDecorView();measure(decor,369,600);capture(decor,"programme-list");dialog.dismiss();
             set(a,"currentIndex",0);
             androidx.media3.exoplayer.ExoPlayer playback=(androidx.media3.exoplayer.ExoPlayer)player;
