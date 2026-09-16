@@ -1,7 +1,8 @@
 # 喜宝IPTV - 群晖 Docker 部署
 services:
   xibao-iptv:
-    image: billcoann/xibao-iptv:latest
+    build: .
+    image: billcoann/xibao-iptv:2.0.0
     container_name: xibao-iptv
     restart: unless-stopped
     ports:
