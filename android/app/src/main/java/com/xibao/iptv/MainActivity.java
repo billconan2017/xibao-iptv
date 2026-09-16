@@ -147,6 +147,8 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable bufferingTimeout = () -> {
         liveTimeoutArmed = false;
         if (player == null || !accessGranted) return;
+        if (!compatibilityActive && !player.getPlayWhenReady()) return;
+        if (phoneUi && player.getPlaybackState() != Player.STATE_BUFFERING) return;
         if (vodMode) { setStatus("点播加载超时，请返回点播列表换线路"); return; }
         playbackFailure = "加载超时，未能正常输出画面";
         handleLiveFailure();
@@ -461,7 +463,7 @@ public class MainActivity extends AppCompatActivity {
                     armLiveTimeout();
                 }
                 else if (state == Player.STATE_READY) {
-                    if (vodMode || liveRendered) markLiveReady();
+                    if (phoneUi || vodMode || liveRendered) markLiveReady();
                 }
                 else if (state == Player.STATE_ENDED) setStatus("节目已结束");
             }
@@ -662,7 +664,7 @@ public class MainActivity extends AppCompatActivity {
     private void armLiveTimeout() {
         if (liveTimeoutArmed) return;
         liveTimeoutArmed = true;
-        handler.postDelayed(bufferingTimeout, 15000);
+        handler.postDelayed(bufferingTimeout, phoneUi ? 20000 : 15000);
     }
 
     private void clearLiveTimeout() {
