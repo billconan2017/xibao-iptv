@@ -10,4 +10,6 @@ android {
 }
 dependencies {
     api 'androidx.media3:media3-exoplayer:1.11.0'
+    implementation 'androidx.annotation:annotation:1.9.1'
+    compileOnly 'org.checkerframework:checker-qual:3.49.5'
 }
