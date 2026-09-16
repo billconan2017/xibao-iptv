@@ -26,6 +26,15 @@ final class ApiClient {
     }
 
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
+    private String deviceId = "", deviceToken = "";
+    void setCredentials(String id, String token) { deviceId=id; deviceToken=token; }
+
+    void loadVodSources(String serverUrl, Callback<JSONObject> callback) {
+        request(serverUrl + "/api/vod/sources", JSONObject::new, callback);
+    }
+    void loadVod(String serverUrl, long source, int page, String search, String id, Callback<JSONObject> callback) {
+        request(serverUrl + "/api/vod/catalog?source="+source+"&page="+page+"&search="+Uri.encode(search)+"&id="+Uri.encode(id), JSONObject::new, callback);
+    }
 
     static String normalizeServerUrl(String raw) {
         String value = raw == null ? "" : raw.trim();
@@ -115,8 +124,11 @@ final class ApiClient {
                 connection.setConnectTimeout(8000);
                 connection.setReadTimeout(12000);
                 connection.setRequestProperty("Accept", "application/json");
-                connection.setRequestProperty("User-Agent", "XibaoTV/2.0");
-                connection.setInstanceFollowRedirects(true);
+                connection.setRequestProperty("User-Agent", "XibaoTV/2.2");
+                connection.setRequestProperty("X-Device-Id", deviceId);
+                connection.setRequestProperty("X-Device-Token", deviceToken);
+                // Do not forward a device credential to a different host through redirects.
+                connection.setInstanceFollowRedirects(false);
                 connection.setRequestMethod(method);
                 if (json != null) {
                     connection.setDoOutput(true);
@@ -128,7 +140,9 @@ final class ApiClient {
                     ? connection.getInputStream() : connection.getErrorStream();
                 String body = read(stream);
                 if (status < 200 || status >= 300) {
-                    throw new IllegalStateException("服务器返回 HTTP " + status);
+                    String message="服务器返回 HTTP " + status;
+                    try { message=new JSONObject(body).optString("msg",message); } catch(Exception ignored) { }
+                    throw new IllegalStateException(message);
                 }
                 callback.onSuccess(parser.parse(body));
             } catch (Exception error) {
