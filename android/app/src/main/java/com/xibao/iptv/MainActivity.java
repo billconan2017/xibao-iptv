@@ -83,6 +83,8 @@ public class MainActivity extends AppCompatActivity {
     private RecyclerView channelList;
     private GroupAdapter groupAdapter;
     private ChannelAdapter channelAdapter;
+    private Runnable cancelPendingGuideFocus;
+    private String playbackFailure = "";
     private String serverUrl = "";
     private String deviceId = "";
     private String selectedGroup = "全部频道";
@@ -453,6 +455,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 else if (state == Player.STATE_READY) {
                     retryCount = 0;
+                    playbackFailure = "";
                     handler.removeCallbacks(retryPlayback);
                     setStatus("");
                 }
@@ -460,6 +463,7 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override public void onPlayerError(@NonNull PlaybackException error) {
+                playbackFailure = PlaybackErrors.describe(error);
                 if (vodMode) {setStatus("点播播放失败，请换线路或返回点播列表");return;}
                 if (tryNextSource(true)) return;
                 scheduleRetry();
@@ -577,6 +581,13 @@ public class MainActivity extends AppCompatActivity {
         channelAdapter = new ChannelAdapter();
         groupList.setAdapter(groupAdapter);
         channelList.setAdapter(channelAdapter);
+        if (!phoneUi) {
+            // Replacing a group is navigation, not an animated list transition.
+            groupList.setItemAnimator(null);
+            channelList.setItemAnimator(null);
+            groupList.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+            channelList.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+        }
 
         refresh.setOnClickListener(v -> loadChannels(false));
         settings.setOnClickListener(v -> {if(phoneUi){setGuideVisible(false);return;}new AlertDialog.Builder(this).setTitle("服务器设置")
@@ -618,6 +629,7 @@ public class MainActivity extends AppCompatActivity {
         handler.removeCallbacks(retryPlayback);
         handler.removeCallbacks(bufferingTimeout);
         retryCount = 0;
+        playbackFailure = "";
         int index = allChannels.indexOf(channel);
         if (index >= 0) currentIndex = index;
         sourceAttempts = 0;
@@ -727,7 +739,12 @@ public class MainActivity extends AppCompatActivity {
         if (touchControls != null) touchControls.setVisibility(visible || vodMode ? View.GONE : View.VISIBLE);
         if (infoPanel != null) infoPanel.setVisibility(View.VISIBLE);
         handler.removeCallbacks(hideGuide);
-        if (visible && channelList != null) channelList.post(() -> channelList.requestFocus());
+        cancelGuideFocus();
+        if (visible && channelList != null) {
+            int position = currentIndex >= 0 && currentIndex < allChannels.size()
+                ? visibleChannels.indexOf(allChannels.get(currentIndex)) : 0;
+            focusChannelRow(Math.max(0, position));
+        }
         if (!visible && playerView != null) playerView.requestFocus();
         if (!visible) scheduleInfoHide();
     }
@@ -865,6 +882,49 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void cancelGuideFocus() {
+        if (cancelPendingGuideFocus != null) {
+            cancelPendingGuideFocus.run();
+            cancelPendingGuideFocus = null;
+        }
+    }
+
+    private void focusChannelRow(int position) {
+        if (visibleChannels.isEmpty()) {
+            focusGuideRow(groupList, Math.max(0, groups.indexOf(selectedGroup)));
+        } else focusGuideRow(channelList, position);
+    }
+
+    private void focusGuideRow(RecyclerView list, int position) {
+        cancelGuideFocus();
+        if (phoneUi || !guideVisible || list == null || list.getAdapter().getItemCount() == 0) return;
+        final int target = Math.min(position, list.getAdapter().getItemCount() - 1);
+        list.stopScroll();
+        list.scrollToPosition(target);
+        // notifyDataSetChanged invalidates attached rows. Wait for the new layout,
+        // then focus the actual row rather than the RecyclerView container.
+        android.view.ViewTreeObserver observer = list.getViewTreeObserver();
+        android.view.ViewTreeObserver.OnGlobalLayoutListener listener = new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+            @Override public void onGlobalLayout() {
+                if (!guideVisible) { cancelGuideFocus(); return; }
+                if (list.hasPendingAdapterUpdates() || list.isComputingLayout()) return;
+                RecyclerView.ViewHolder holder = list.findViewHolderForAdapterPosition(target);
+                if (holder != null) {
+                    cancelGuideFocus();
+                    holder.itemView.requestFocus();
+                }
+            }
+        };
+        Runnable attempt = listener::onGlobalLayout;
+        cancelPendingGuideFocus = () -> {
+            list.removeCallbacks(attempt);
+            if (observer.isAlive()) observer.removeOnGlobalLayoutListener(listener);
+            else list.getViewTreeObserver().removeOnGlobalLayoutListener(listener);
+        };
+        observer.addOnGlobalLayoutListener(listener);
+        list.post(attempt);
+    }
+
     private final class GroupAdapter extends TextAdapter {
         @NonNull @Override public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
             Holder holder = super.onCreateViewHolder(parent, viewType);
@@ -883,11 +943,11 @@ public class MainActivity extends AppCompatActivity {
             styleItem(item, item.hasFocus(), item.isSelected());
             item.setOnClickListener(v -> {
                 filterChannels(group);
-                channelList.requestFocus();
+                if (!phoneUi) focusChannelRow(0);
             });
             item.setOnKeyListener((v, keyCode, event) -> {
                 if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    filterChannels(group); channelList.requestFocus(); return true;
+                    filterChannels(group); focusChannelRow(0); return true;
                 }
                 return false;
             });
@@ -914,7 +974,7 @@ public class MainActivity extends AppCompatActivity {
             });
             item.setOnKeyListener((v, keyCode, event) -> {
                 if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    groupList.requestFocus(); return true;
+                    focusGuideRow(groupList, Math.max(0, groups.indexOf(selectedGroup))); return true;
                 }
                 return false;
             });
@@ -922,6 +982,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void releasePlayer() {
+        cancelGuideFocus();
         if(programmeDialog!=null){programmeDialog.dismiss();programmeDialog=null;}
         if(vodBrowser!=null){vodBrowser.close();vodBrowser=null;}
         handler.removeCallbacksAndMessages(null);
@@ -980,11 +1041,11 @@ public class MainActivity extends AppCompatActivity {
         handler.removeCallbacks(retryPlayback);
         handler.removeCallbacks(bufferingTimeout);
         if (++retryCount > 3) {
-            setStatus("暂时无法播放，请换个频道或打开频道列表重试");
+            setStatus((playbackFailure.isEmpty() ? "暂时无法播放" : playbackFailure) + "，请换线路或频道重试");
             setGuideVisible(true);
             return;
         }
-        setStatus("信号暂时中断，正在自动重连（" + retryCount + "/3）…");
+        setStatus((playbackFailure.isEmpty() ? "信号暂时中断" : playbackFailure) + "，正在自动重连（" + retryCount + "/3）…");
         handler.postDelayed(retryPlayback, retryCount * 3000L);
     }
     private void buildTouchControls() {
