@@ -1,16 +1,4 @@
 # 喜宝IPTV - 群晖 Docker 部署
-#
-# 使用方式：
-#   1. 群晖文件管理器创建目录 /docker/xibao-iptv
-#   2. 把本文件放进去
-#   3. SSH 执行:
-#      cd /volume1/docker/xibao-iptv
-#      docker compose up -d
-#   4. 访问 http://群晖IP:8080 下载 APK
-#
-# APK 下载后安装到手机/电视
-# APP 第一次打开时输入你的服务器地址即可使用
-
 services:
   xibao-iptv:
     image: billcoann/xibao-iptv:latest
@@ -18,49 +6,3 @@ services:
     restart: unless-stopped
     ports:
       - "8080:80"
-    volumes:
-      - ./download:/tmp/dl
-    # 启动后自动从 GitHub Release 下载 APK
-    command: >
-      sh -c "
-        wget -q 'https://github.com/billconan2017/xibao-iptv/releases/download/v1.0.0/xibao-iptv-v1.0.0.apk'
-          -O /usr/share/nginx/html/xibao-iptv.apk &&
-        echo '<!DOCTYPE html>
-      <html lang=\"zh-CN\">
-      <head><meta charset=\"UTF-8\">
-      <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-      <title>喜宝IPTV 下载</title>
-      <style>
-        body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a0a;color:#fff;
-        display:flex;flex-direction:column;align-items:center;justify-content:center;
-        min-height:100vh;margin:0;padding:24px;text-align:center}
-        .card{background:#1a1a2e;border-radius:16px;padding:40px 32px;max-width:400px;width:100%}
-        .logo{font-size:32px;margin:0 0 8px}
-        .sub{color:#888;font-size:14px;margin-bottom:24px}
-        .btn{display:inline-block;padding:16px 40px;background:#ff6b35;color:#fff;
-        border-radius:12px;text-decoration:none;font-size:18px;font-weight:600}
-        .btn:hover{background:#e85a2a}
-        .info{color:#666;font-size:12px;margin-top:20px;line-height:1.6}
-        .step{text-align:left;color:#aaa;font-size:13px;margin:20px 0;padding:12px;
-        background:#111;border-radius:8px}
-      </style></head>
-      <body><div class=\"card\">
-        <h1 class=\"logo\">📺 喜宝IPTV</h1>
-        <p class=\"sub\">开源 IPTV 播放器 · 手机/电视通用</p>
-        <a class=\"btn\" href=\"/xibao-iptv.apk\" download>📥 下载 APK</a>
-        <div class=\"step\">
-          <strong>安装后配置：</strong><br>
-          1. 安装 APK<br>
-          2. 打开 APP<br>
-          3. 输入服务器地址<br>
-          4. 即可播放
-        </div>
-        <p class=\"info\">
-          全架构 arm64-v8a / armeabi-v7a / x86<br>
-          minSdk 24 · Capacitor + Vue 3<br>
-          <a href=\"https://github.com/billconan2017/xibao-iptv\">GitHub 仓库</a>
-        </p>
-      </div></body></html>'
-          > /usr/share/nginx/html/index.html &&
-        nginx -g 'daemon off;'
-      "
