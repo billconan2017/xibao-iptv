@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = 'XibaoIPTV'
 include ':app'
+include ':decoder-ffmpeg'

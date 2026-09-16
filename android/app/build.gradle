@@ -8,8 +8,8 @@ android {
         applicationId "com.xibao.iptv"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 240
-        versionName "2.4.0"
+        versionCode 241
+        versionName "2.4.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -45,6 +45,7 @@ android {
 }
 
 dependencies {
+    implementation project(':decoder-ffmpeg')
     testImplementation 'org.robolectric:robolectric:4.16'
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation 'androidx.recyclerview:recyclerview:1.4.0'
@@ -56,3 +57,16 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
 }
+
+// Release builds must not silently fall back to a decoder-less APK.
+tasks.register('verifyAudioNativeLibraries') {
+    doLast {
+        ['armeabi-v7a','arm64-v8a','x86','x86_64'].each { abi ->
+            def nativeLib = project(':decoder-ffmpeg').file("src/main/jniLibs/${abi}/libffmpegJNI.so")
+            if (!nativeLib.exists() || nativeLib.length() < 10000) {
+                throw new GradleException("Missing FFmpeg audio library for ${abi}. Run scripts/build-audio-native.sh or download the CI artifact; see decoder-ffmpeg/README.md.")
+            }
+        }
+    }
+}
+tasks.matching { it.name == 'preReleaseBuild' }.configureEach { dependsOn 'verifyAudioNativeLibraries' }

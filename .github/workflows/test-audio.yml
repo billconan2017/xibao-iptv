@@ -1,0 +1,44 @@
+name: Test packaged audio on Android
+on:
+  workflow_dispatch:
+    inputs:
+      native_run:
+        description: Successful Build audio decoders run ID
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  audio:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Download native libraries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_RUN: ${{ inputs.native_run }}
+        run: gh run download "$NATIVE_RUN" --name audio-native-libs --dir android/decoder-ffmpeg/src/main/jniLibs
+      - name: Generate synthetic audio fixtures
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          mkdir -p android/app/src/androidTest/assets
+          for codec in mp2 aac ac3 eac3; do
+            ffmpeg -hide_banner -loglevel error -f lavfi -i 'sine=frequency=1000:sample_rate=48000' -ac 2 -c:a "$codec" -b:a 384k -frames:a 1 "android/app/src/androidTest/assets/tone.$codec"
+          done
+          sudo chmod 666 /dev/kvm
+      - name: Decode MP2 and AAC on Android 15
+        uses: ReactiveCircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: cd android && bash gradlew --no-daemon connectedDebugAndroidTest
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: audio-device-test-report
+          path: android/app/build/reports/androidTests/

@@ -438,7 +438,9 @@ public class MainActivity extends AppCompatActivity {
         compactUi = phoneUi && getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT;
         root.removeAllViews();
 
-        player = new ExoPlayer.Builder(this, new androidx.media3.exoplayer.DefaultRenderersFactory(this).setEnableDecoderFallback(true)).build();
+        player = new ExoPlayer.Builder(this, new androidx.media3.exoplayer.DefaultRenderersFactory(this)
+            .setEnableDecoderFallback(true)
+            .setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)).build();
         player.addListener(new Player.Listener() {
             @Override public void onIsPlayingChanged(boolean playing) {
                 if(phonePauseButton!=null)phonePauseButton.setText(playing?"暂停":"播放");
