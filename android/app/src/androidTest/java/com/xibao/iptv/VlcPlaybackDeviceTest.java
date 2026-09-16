@@ -30,7 +30,7 @@ public class VlcPlaybackDeviceTest {
             try {
                 scenario.onActivity(a->{
                     player[0]=new VlcLivePlayer(a);a.setContentView(player[0].view());
-                    player[0].play(fixture.toURI().toString(),software,new LiveCompatibilityPlayer.Listener(){
+                    player[0].play(android.net.Uri.fromFile(fixture).toString(),software,new LiveCompatibilityPlayer.Listener(){
                         public void onVideo(){output.countDown();}
                         public void onBuffering(){}
                         public void onError(){failed.set(true);output.countDown();}

@@ -45,7 +45,14 @@ jobs:
           arch: ${{ matrix.arch }}
           profile: pixel_2
           disable-animations: true
-          script: cd android && bash gradlew --no-daemon :app:connectedDebugAndroidTest
+          script: |
+            cd android
+            adb logcat -c
+            result=0
+            bash gradlew --no-daemon :app:connectedDebugAndroidTest || result=$?
+            mkdir -p app/build/reports/androidTests
+            adb logcat -d > app/build/reports/androidTests/device-logcat.txt
+            exit "$result"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
