@@ -1,0 +1,16 @@
+LibVLC Android 3.7.6 - VideoLAN and contributors
+Licensed under GNU LGPL version 2.1 or later. The license text is included in
+FFmpeg-LGPL-2.1.txt in this directory.
+
+Unmodified upstream binary dependency:
+https://repo.maven.apache.org/maven2/org/videolan/android/libvlc-all/3.7.6/
+Android wrapper sources:
+https://repo.maven.apache.org/maven2/org/videolan/android/libvlc-all/3.7.6/libvlc-all-3.7.6-sources.jar
+Native source/build project and its pinned VLC source revision:
+https://code.videolan.org/videolan/libvlcjni
+https://code.videolan.org/videolan/vlc-android/-/tree/libvlc-3.7.6
+
+This application's complete source and Gradle build are published at
+https://github.com/billconan2017/xibao-iptv
+Users may replace the dynamically loaded LibVLC libraries, rebuild, and sign
+their own application. The upstream library is not modified by this project.

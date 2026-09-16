@@ -10,3 +10,4 @@ android/decoder-ffmpeg/build/
 android/decoder-ffmpeg/src/main/jni/ffmpeg/
 android/decoder-ffmpeg/src/main/jniLibs/
 android/app/src/androidTest/assets/tone.*
+android/app/src/androidTest/assets/synthetic.ts

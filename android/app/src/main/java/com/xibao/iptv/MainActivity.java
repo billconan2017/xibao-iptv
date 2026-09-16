@@ -85,6 +85,11 @@ public class MainActivity extends AppCompatActivity {
     private ChannelAdapter channelAdapter;
     private Runnable cancelPendingGuideFocus;
     private String playbackFailure = "";
+    private final RemotePressGate remotePressGate = new RemotePressGate();
+    private LiveCompatibilityPlayer compatibilityPlayer;
+    private boolean compatibilityActive, liveRendered, liveTimeoutArmed;
+    private int liveEngine, liveAttempt;
+    private final java.util.Map<String, Integer> workingEngines = new java.util.HashMap<>();
     private String serverUrl = "";
     private String deviceId = "";
     private String selectedGroup = "全部频道";
@@ -127,8 +132,8 @@ public class MainActivity extends AppCompatActivity {
         if (player == null || !activeScreen) return;
         final int generation = requestGeneration;
         api.registerDevice(serverUrl,deviceId,"喜宝-"+deviceId.substring(deviceId.length()-6),Build.MANUFACTURER+" "+Build.MODEL,new ApiClient.Callback<JSONObject>() {
-            public void onSuccess(JSONObject value) { runOnUiThread(()->{if(!isCurrent(generation))return;accessGranted=value.optBoolean("authorized",false);if(!accessGranted){player.stop();allChannels.clear();visibleChannels.clear();rebuildGroups();filterChannels(selectedGroup);setGuideVisible(true);setStatus(authorizationMessage(value));}}); }
-            public void onError(Exception e) { runOnUiThread(()->{if(isCurrent(generation)) {accessGranted=false;player.stop();setStatus("授权连接失败，请按刷新重新连接："+friendlyError(e));setGuideVisible(true);}}); }
+            public void onSuccess(JSONObject value) { runOnUiThread(()->{if(!isCurrent(generation))return;accessGranted=value.optBoolean("authorized",false);if(!accessGranted){stopPlayback();allChannels.clear();visibleChannels.clear();rebuildGroups();filterChannels(selectedGroup);setGuideVisible(true);setStatus(authorizationMessage(value));}}); }
+            public void onError(Exception e) { runOnUiThread(()->{if(isCurrent(generation)) {accessGranted=false;stopPlayback();setStatus("授权连接失败，请按刷新重新连接："+friendlyError(e));setGuideVisible(true);}}); }
         });
         if(!vodMode && currentIndex>=0 && currentIndex<allChannels.size()) loadEpg(allChannels.get(currentIndex));
         handler.postDelayed(this,60000);
@@ -140,9 +145,11 @@ public class MainActivity extends AppCompatActivity {
         }
     };
     private final Runnable bufferingTimeout = () -> {
-        if (player != null && player.getPlaybackState() == Player.STATE_BUFFERING) {
-            if (vodMode) setStatus("点播加载超时，请返回点播列表换线路"); else if (!tryNextSource(true)) scheduleRetry();
-        }
+        liveTimeoutArmed = false;
+        if (player == null || !accessGranted) return;
+        if (vodMode) { setStatus("点播加载超时，请返回点播列表换线路"); return; }
+        playbackFailure = "加载超时，未能正常输出画面";
+        handleLiveFailure();
     };
     private String numberBuffer = "";
     private final Runnable hideGuide = () -> setGuideVisible(false);
@@ -347,7 +354,7 @@ public class MainActivity extends AppCompatActivity {
     private void loadChannels(boolean buildUi) {
         final int generation = ++requestGeneration;
         accessGranted=false;
-        if(player!=null)player.pause();
+        if(player!=null)stopPlayback();
         if (buildUi) buildPlayerScreen();
         setLoading(true, "正在连接管理平台…");
         String model = (Build.MANUFACTURER + " " + Build.MODEL).trim();
@@ -358,7 +365,7 @@ public class MainActivity extends AppCompatActivity {
                     if (!isCurrent(generation)) return;
                     accessGranted=value.optBoolean("authorized",false);
                     if (!value.optBoolean("authorized", false)) {
-                        player.stop();allChannels.clear();currentIndex=-1;rebuildGroups();filterChannels(selectedGroup);
+                        stopPlayback();allChannels.clear();currentIndex=-1;rebuildGroups();filterChannels(selectedGroup);
                         setLoading(false, authorizationMessage(value));
                         setGuideVisible(true);
                         return;
@@ -448,25 +455,26 @@ public class MainActivity extends AppCompatActivity {
                 if(phonePauseButton!=null)phonePauseButton.setText(playing?"暂停":"播放");
             }
             @Override public void onPlaybackStateChanged(int state) {
-                handler.removeCallbacks(bufferingTimeout);
+                if (compatibilityActive) return;
                 if (state == Player.STATE_BUFFERING) {
                     setStatus("正在连接，请稍候…");
-                    handler.postDelayed(bufferingTimeout, 20000);
+                    armLiveTimeout();
                 }
                 else if (state == Player.STATE_READY) {
-                    retryCount = 0;
-                    playbackFailure = "";
-                    handler.removeCallbacks(retryPlayback);
-                    setStatus("");
+                    if (vodMode || liveRendered) markLiveReady();
                 }
                 else if (state == Player.STATE_ENDED) setStatus("节目已结束");
             }
 
+            @Override public void onRenderedFirstFrame() {
+                if (!compatibilityActive) markLiveReady();
+            }
+
             @Override public void onPlayerError(@NonNull PlaybackException error) {
+                if (compatibilityActive) return;
                 playbackFailure = PlaybackErrors.describe(error);
                 if (vodMode) {setStatus("点播播放失败，请换线路或返回点播列表");return;}
-                if (tryNextSource(true)) return;
-                scheduleRetry();
+                handleLiveFailure();
             }
         });
 
@@ -627,7 +635,7 @@ public class MainActivity extends AppCompatActivity {
         vodMode=false;playerView.setUseController(false);currentPrograms=new JSONArray();
         if(epgProgress!=null)epgProgress.setProgress(0);
         handler.removeCallbacks(retryPlayback);
-        handler.removeCallbacks(bufferingTimeout);
+        clearLiveTimeout();
         retryCount = 0;
         playbackFailure = "";
         int index = allChannels.indexOf(channel);
@@ -645,10 +653,98 @@ public class MainActivity extends AppCompatActivity {
 
     private void startChannelSource(Channel channel) {
         if (player == null || !accessGranted) return;
-        player.setMediaItem(MediaItem.fromUri(channel.currentUrl()));
-        player.prepare();
-        player.play();
+        int mode = phoneUi ? 0 : getSharedPreferences(PREFS, MODE_PRIVATE).getInt("tv_playback_mode", 0);
+        liveEngine = mode == 0 ? (phoneUi ? 0 : workingEngines.getOrDefault(channelKey(channel), 0)) : mode - 1;
+        startLiveAttempt(channel);
         updateChannelTitle(channel);
+    }
+
+    private void armLiveTimeout() {
+        if (liveTimeoutArmed) return;
+        liveTimeoutArmed = true;
+        handler.postDelayed(bufferingTimeout, 15000);
+    }
+
+    private void clearLiveTimeout() {
+        handler.removeCallbacks(bufferingTimeout);
+        liveTimeoutArmed = false;
+    }
+
+    private void markLiveReady() {
+        if (!accessGranted) return;
+        if (liveRendered && !liveTimeoutArmed) return;
+        liveRendered = true;
+        clearLiveTimeout();
+        retryCount = 0;
+        playbackFailure = "";
+        handler.removeCallbacks(retryPlayback);
+        if (!phoneUi && !vodMode && currentIndex >= 0 && currentIndex < allChannels.size())
+            workingEngines.put(channelKey(allChannels.get(currentIndex)), liveEngine);
+        setStatus("");
+    }
+
+    LiveCompatibilityPlayer createCompatibilityPlayer() { return new VlcLivePlayer(this); }
+
+    private void startLiveAttempt(Channel channel) {
+        final int token = ++liveAttempt;
+        clearLiveTimeout();
+        liveRendered = false;
+        compatibilityActive = liveEngine != 0;
+        if (compatibilityPlayer != null) compatibilityPlayer.stop();
+        player.stop();
+        if (!compatibilityActive) {
+            if (compatibilityPlayer != null) compatibilityPlayer.view().setVisibility(View.GONE);
+            playerView.setVisibility(View.VISIBLE);
+            player.setMediaItem(MediaItem.fromUri(channel.currentUrl()));
+            player.prepare();
+            player.play();
+        } else {
+            try {
+                if (compatibilityPlayer == null) {
+                    compatibilityPlayer = createCompatibilityPlayer();
+                    root.addView(compatibilityPlayer.view(), 0, match());
+                }
+                playerView.setVisibility(View.GONE);
+                compatibilityPlayer.view().setVisibility(View.VISIBLE);
+                compatibilityPlayer.view().setOnClickListener(v -> setGuideVisible(!guideVisible));
+                setStatus(liveEngine == 1 ? "正在使用兼容播放器 · 硬件优先…" : "正在使用兼容播放器 · 软件解码…");
+                compatibilityPlayer.play(channel.currentUrl(), liveEngine == 2, new LiveCompatibilityPlayer.Listener() {
+                    private boolean valid() { return liveAttempt == token && compatibilityActive && accessGranted; }
+                    public void onVideo() { if (valid()) markLiveReady(); }
+                    public void onBuffering() { if (valid()) armLiveTimeout(); }
+                    public void onError() {
+                        if (!valid()) return;
+                        playbackFailure = "兼容播放器未能播放此线路";
+                        handleLiveFailure();
+                    }
+                });
+            } catch (RuntimeException | LinkageError error) {
+                playbackFailure = "此设备无法启动兼容播放器";
+                // Post to avoid recursing into a half-created native player.
+                handler.post(() -> { if (liveAttempt == token) { liveEngine = 2; handleLiveFailure(); } });
+            }
+        }
+        armLiveTimeout();
+    }
+
+    private void handleLiveFailure() {
+        clearLiveTimeout();
+        if (!accessGranted || vodMode || currentIndex < 0 || currentIndex >= allChannels.size()) return;
+        int mode = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("tv_playback_mode", 0);
+        if (!phoneUi && mode == 0 && liveEngine < 2) {
+            liveEngine++;
+            startLiveAttempt(allChannels.get(currentIndex));
+            return;
+        }
+        if (!tryNextSource(true)) { stopPlayback(); scheduleRetry(); }
+    }
+
+    private void stopPlayback() {
+        ++liveAttempt;
+        clearLiveTimeout();
+        handler.removeCallbacks(retryPlayback);
+        if (compatibilityPlayer != null) compatibilityPlayer.stop();
+        if (player != null) player.stop();
     }
 
     private void updateChannelTitle(Channel channel) {
@@ -745,7 +841,12 @@ public class MainActivity extends AppCompatActivity {
                 ? visibleChannels.indexOf(allChannels.get(currentIndex)) : 0;
             focusChannelRow(Math.max(0, position));
         }
-        if (!visible && playerView != null) playerView.requestFocus();
+        if (!visible && playerView != null) {
+            if (compatibilityActive && compatibilityPlayer != null) {
+                compatibilityPlayer.view().setFocusable(true);
+                compatibilityPlayer.view().requestFocus();
+            } else playerView.requestFocus();
+        }
         if (!visible) scheduleInfoHide();
     }
 
@@ -786,14 +887,18 @@ public class MainActivity extends AppCompatActivity {
         if (guideVisible) {
             return super.dispatchKeyEvent(event);
         }
+        // A held D-pad produces many ACTION_DOWN events. Some box remotes even
+        // mark all of them as fresh presses, so also apply a short burst limit.
+        if (key == KeyEvent.KEYCODE_DPAD_UP || key == KeyEvent.KEYCODE_DPAD_DOWN) {
+            if (remotePressGate.accept(event.getRepeatCount(), event.getEventTime()))
+                changeChannel(key == KeyEvent.KEYCODE_DPAD_UP ? 1 : -1);
+            return true;
+        }
+        if (event.getRepeatCount() > 0) return true;
         switch (key) {
-            case KeyEvent.KEYCODE_DPAD_UP: changeChannel(-1); return true;
-            case KeyEvent.KEYCODE_DPAD_DOWN: changeChannel(1); return true;
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
-                if (player.getPlaybackState() == Player.STATE_IDLE || player.getPlayerError() != null) {
-                    player.prepare(); player.play();
-                } else setGuideVisible(true);
+                setGuideVisible(true);
                 return true;
             case KeyEvent.KEYCODE_MENU:
             case KeyEvent.KEYCODE_DPAD_LEFT:
@@ -983,6 +1088,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void releasePlayer() {
         cancelGuideFocus();
+        ++liveAttempt;
+        clearLiveTimeout();
+        if (compatibilityPlayer != null) { compatibilityPlayer.close(); compatibilityPlayer = null; }
+        compatibilityActive = false;
         if(programmeDialog!=null){programmeDialog.dismiss();programmeDialog=null;}
         if(vodBrowser!=null){vodBrowser.close();vodBrowser=null;}
         handler.removeCallbacksAndMessages(null);
@@ -1000,15 +1109,24 @@ public class MainActivity extends AppCompatActivity {
         handler.removeCallbacks(epgTicker);
         handler.removeCallbacks(heartbeat);
         handler.removeCallbacks(retryPlayback);
-        handler.removeCallbacks(bufferingTimeout);
-        if (player != null) {resumePlayback=player.getPlayWhenReady();player.pause();}
+        clearLiveTimeout();
+        if (player != null) {
+            resumePlayback=compatibilityActive || player.getPlayWhenReady();
+            if (compatibilityActive) stopPlayback(); else player.pause();
+        }
     }
 
     @Override protected void onStart() {
         super.onStart();
         if(orientationListener!=null && orientationListener.canDetectOrientation())orientationListener.enable();
         activeScreen=true;
-        if (player != null) { if(resumePlayback && accessGranted && (currentIndex>=0 || vodMode))player.play(); handler.removeCallbacks(epgTicker);handler.post(epgTicker);handler.removeCallbacks(heartbeat);handler.post(heartbeat); }
+        if (player != null) {
+            if(resumePlayback && accessGranted && (currentIndex>=0 || vodMode)) {
+                if (compatibilityActive && !vodMode) startChannelSource(allChannels.get(currentIndex));
+                else { player.play(); if (!vodMode && !liveRendered) armLiveTimeout(); }
+            }
+            handler.removeCallbacks(epgTicker);handler.post(epgTicker);handler.removeCallbacks(heartbeat);handler.post(heartbeat);
+        }
     }
 
     @Override protected void onSaveInstanceState(@NonNull Bundle outState) {
@@ -1039,7 +1157,7 @@ public class MainActivity extends AppCompatActivity {
     }
     private void scheduleRetry() {
         handler.removeCallbacks(retryPlayback);
-        handler.removeCallbacks(bufferingTimeout);
+        clearLiveTimeout();
         if (++retryCount > 3) {
             setStatus((playbackFailure.isEmpty() ? "暂时无法播放" : playbackFailure) + "，请换线路或频道重试");
             setGuideVisible(true);
@@ -1156,7 +1274,7 @@ public class MainActivity extends AppCompatActivity {
     private void buildNavigation() {
         navigation=new LinearLayout(this);navigation.setGravity(Gravity.CENTER_VERTICAL);
         navigation.setPadding(dp(10),dp(8),dp(10),dp(8));navigation.setBackgroundColor(BG);
-        String[] labels={"返回","节目单","点播","收藏","退出"};
+        String[] labels={"返回","节目单","点播","收藏","播放设置","退出"};
         for(int i=0;i<labels.length;i++) {
             final int action=i;Button control=button(labels[i]);control.setTextSize(phoneUi?13:17);
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(48),1);lp.setMargins(dp(2),0,dp(2),0);
@@ -1166,10 +1284,24 @@ public class MainActivity extends AppCompatActivity {
                 else if(action==1)showPrograms();
                 else if(action==2)openVod();
                 else if(action==3){toggleFavorite();}
+                else if(action==4)showPlaybackSettings();
                 else confirmExit();
             });
         }
         root.addView(navigation,new FrameLayout.LayoutParams(-1,dp(64),Gravity.TOP));
+    }
+
+    private void showPlaybackSettings() {
+        String[] modes={"自动兼容（推荐）", "原播放器 · 硬件解码", "兼容播放器 · 硬件优先", "兼容播放器 · 软件解码"};
+        int selected=getSharedPreferences(PREFS,MODE_PRIVATE).getInt("tv_playback_mode",0);
+        new AlertDialog.Builder(this).setTitle("电视播放方式")
+            .setSingleChoiceItems(modes,selected,(dialog,which)->{
+                getSharedPreferences(PREFS,MODE_PRIVATE).edit().putInt("tv_playback_mode",which).apply();
+                workingEngines.clear();dialog.dismiss();
+                if(!vodMode && accessGranted && currentIndex>=0 && currentIndex<allChannels.size()) {
+                    retryCount=0;sourceAttempts=0;startChannelSource(allChannels.get(currentIndex));setGuideVisible(false);
+                }
+            }).setNegativeButton("返回",null).show();
     }
 
     private void renderEpg() {
@@ -1204,7 +1336,11 @@ public class MainActivity extends AppCompatActivity {
     private void playVod(String title,String url) {
         if(player==null)return;
         if(!accessGranted){setStatus("设备未授权，请按刷新后重试");return;}
-        handler.removeCallbacks(retryPlayback);handler.removeCallbacks(bufferingTimeout);
+        stopPlayback();
+        compatibilityActive = false;
+        if (compatibilityPlayer != null) compatibilityPlayer.view().setVisibility(View.GONE);
+        playerView.setVisibility(View.VISIBLE);
+        handler.removeCallbacks(retryPlayback);clearLiveTimeout();
         vodMode=true;channelTitle.setText(title);epgText.setText("家庭点播 · 点击画面可暂停、拖动进度");epgTime.setText("返回按钮可继续看直播或重新选集");epgProgress.setProgress(0);
         playerView.setUseController(true);player.setMediaItem(MediaItem.fromUri(url));player.prepare();player.play();setGuideVisible(false);playerView.showController();
     }
