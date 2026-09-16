@@ -1,0 +1,13 @@
+apply plugin: 'com.android.library'
+android {
+    namespace 'androidx.media3.decoder.ffmpeg'
+    compileSdk 36
+    defaultConfig { minSdk 24 }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+dependencies {
+    api 'androidx.media3:media3-exoplayer:1.11.0'
+}

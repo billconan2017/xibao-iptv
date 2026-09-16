@@ -5,3 +5,7 @@ android/app/build
 *.apk
 dist/
 .env
+
+android/decoder-ffmpeg/build/
+android/decoder-ffmpeg/src/main/jni/ffmpeg/
+android/decoder-ffmpeg/src/main/jniLibs/

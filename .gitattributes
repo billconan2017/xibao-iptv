@@ -1,0 +1,2 @@
+scripts/*.sh text eol=lf
+android/decoder-ffmpeg/src/main/jni/*.sh text eol=lf
