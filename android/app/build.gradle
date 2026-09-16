@@ -8,8 +8,8 @@ android {
         applicationId "com.xibao.iptv"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 200
-        versionName "2.0.0"
+        versionCode 210
+        versionName "2.1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -17,6 +17,7 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+    testOptions { unitTests.includeAndroidResources = true }
 
     def releaseStore = System.getenv('XIBAO_KEYSTORE')
     def releaseStorePassword = System.getenv('XIBAO_STORE_PASSWORD')
@@ -44,10 +45,12 @@ android {
 }
 
 dependencies {
+    testImplementation 'org.robolectric:robolectric:4.16'
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation 'androidx.recyclerview:recyclerview:1.4.0'
     implementation 'androidx.media3:media3-exoplayer:1.11.0'
     implementation 'androidx.media3:media3-exoplayer-hls:1.11.0'
+    implementation 'androidx.media3:media3-exoplayer-rtsp:1.11.0'
     implementation 'androidx.media3:media3-ui:1.11.0'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

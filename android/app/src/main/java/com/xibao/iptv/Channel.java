@@ -16,13 +16,13 @@ final class Channel {
         this.id = id;
         this.name = name;
         addSource(url);
-        this.group = group == null || group.isBlank() ? "未分组" : group;
+        this.group = group == null || group.trim().isEmpty() ? "未分组" : group;
         this.tvgId = tvgId == null ? "" : tvgId;
         this.logo = logo == null ? "" : logo;
     }
 
     void addSource(String url) {
-        if (url != null && !url.isBlank() && !sources.contains(url)) sources.add(url);
+        if (url != null && !url.trim().isEmpty() && !sources.contains(url)) sources.add(url);
     }
 
     String currentUrl() {

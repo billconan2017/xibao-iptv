@@ -20,6 +20,8 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.ScrollView;
+import android.content.res.Configuration;
 
 import androidx.annotation.NonNull;
 import androidx.activity.OnBackPressedCallback;
@@ -82,6 +84,21 @@ public class MainActivity extends AppCompatActivity {
     private long pendingChannelId = -1;
     private boolean guideVisible = true;
     private boolean compactUi = false;
+    private boolean phoneUi;
+    private int requestGeneration = 0;
+    private LinearLayout touchControls;
+    private int retryCount = 0;
+    private final Runnable retryPlayback = () -> {
+        if (player != null && currentIndex >= 0 && currentIndex < allChannels.size()) {
+            sourceAttempts = 0;
+            startChannelSource(allChannels.get(currentIndex));
+        }
+    };
+    private final Runnable bufferingTimeout = () -> {
+        if (player != null && player.getPlaybackState() == Player.STATE_BUFFERING) {
+            if (!tryNextSource(true)) scheduleRetry();
+        }
+    };
     private String numberBuffer = "";
     private final Runnable hideGuide = () -> setGuideVisible(false);
     private final Runnable commitNumber = this::playNumberBuffer;
@@ -89,13 +106,14 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        hideSystemUi();
+        phoneUi = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_TYPE_MASK) != Configuration.UI_MODE_TYPE_TELEVISION;
         root = new FrameLayout(this);
         root.setBackgroundColor(BG);
         setContentView(root);
+        hideSystemUi();
         if (savedInstanceState != null) pendingChannelId = savedInstanceState.getLong("channel_id", -1);
         deviceId = getSharedPreferences(PREFS, MODE_PRIVATE).getString("device_id", "");
-        if (deviceId.isBlank()) {
+        if (deviceId.trim().isEmpty()) {
             deviceId = "xibao-" + UUID.randomUUID();
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("device_id", deviceId).apply();
         }
@@ -109,7 +127,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         serverUrl = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_SERVER, "");
-        if (serverUrl.isBlank()) showConfigScreen(null); else loadChannels(true);
+        if (serverUrl.trim().isEmpty()) showConfigScreen(null); else loadChannels(true);
     }
 
     private void hideSystemUi() {
@@ -128,18 +146,19 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showConfigScreen(String error) {
+        requestGeneration++;
         releasePlayer();
         root.removeAllViews();
         root.setBackgroundColor(BG);
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(44), dp(34), dp(44), dp(34));
+        card.setPadding(dp(phoneUi ? 24 : 44), dp(30), dp(phoneUi ? 24 : 44), dp(30));
         card.setGravity(Gravity.CENTER_HORIZONTAL);
         card.setBackground(rounded(PANEL, 22));
 
         TextView brand = text("喜宝 TV", 34, Color.WHITE, true);
-        TextView subtitle = text("为电视和遥控器重新设计的直播播放器", 16, MUTED, false);
+        TextView subtitle = text("连接一次，以后打开就看电视", 18, MUTED, false);
         LinearLayout.LayoutParams subtitleParams = wrap();
         subtitleParams.setMargins(0, dp(6), 0, dp(28));
         card.addView(brand, wrap());
@@ -147,8 +166,9 @@ public class MainActivity extends AppCompatActivity {
 
         EditText input = new EditText(this);
         input.setSingleLine(true);
-        input.setText(serverUrl.isBlank() ? DEFAULT_SERVER : serverUrl);
-        input.setHint("http://192.168.6.3:8089");
+        input.setText(serverUrl.trim().isEmpty() ? DEFAULT_SERVER : serverUrl);
+        input.setHint("http://192.168.6.3:8189");
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
         input.setTextColor(Color.WHITE);
         input.setHintTextColor(Color.rgb(100, 112, 128));
         input.setTextSize(18);
@@ -164,7 +184,7 @@ public class MainActivity extends AppCompatActivity {
         card.addView(hint, hintParams);
 
         Button connect = button("连接服务器");
-        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(dp(280), dp(62));
+        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(62));
         card.addView(connect, buttonParams);
 
         TextView message = text(error == null ? "" : error, 14, Color.rgb(255, 118, 118), false);
@@ -174,6 +194,7 @@ public class MainActivity extends AppCompatActivity {
 
         connect.setOnClickListener(v -> {
             try {
+                final int generation = ++requestGeneration;
                 String candidate = ApiClient.normalizeServerUrl(input.getText().toString());
                 connect.setEnabled(false);
                 connect.setText("正在连接…");
@@ -181,6 +202,7 @@ public class MainActivity extends AppCompatActivity {
                 api.test(candidate, new ApiClient.Callback<>() {
                     @Override public void onSuccess(String value) {
                         runOnUiThread(() -> {
+                            if (!isCurrent(generation)) return;
                             serverUrl = candidate;
                             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_SERVER, serverUrl).apply();
                             loadChannels(true);
@@ -189,6 +211,7 @@ public class MainActivity extends AppCompatActivity {
 
                     @Override public void onError(Exception e) {
                         runOnUiThread(() -> {
+                            if (!isCurrent(generation)) return;
                             connect.setEnabled(true);
                             connect.setText("连接服务器");
                             message.setText("连接失败：" + friendlyError(e));
@@ -203,11 +226,15 @@ public class MainActivity extends AppCompatActivity {
 
         int cardWidth = Math.min(dp(720), getResources().getDisplayMetrics().widthPixels - dp(32));
         FrameLayout.LayoutParams cardParams = new FrameLayout.LayoutParams(cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
-        root.addView(card, cardParams);
-        connect.requestFocus();
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.addView(card);
+        root.addView(scroll, cardParams);
+        connect.post(connect::requestFocus);
     }
 
     private void loadChannels(boolean buildUi) {
+        final int generation = ++requestGeneration;
         if (buildUi) buildPlayerScreen();
         setLoading(true, "正在连接管理平台…");
         String model = (Build.MANUFACTURER + " " + Build.MODEL).trim();
@@ -215,6 +242,7 @@ public class MainActivity extends AppCompatActivity {
         api.registerDevice(serverUrl, deviceId, deviceName, model, new ApiClient.Callback<>() {
             @Override public void onSuccess(JSONObject value) {
                 runOnUiThread(() -> {
+                    if (!isCurrent(generation)) return;
                     if (!value.optBoolean("authorized", false)) {
                         setLoading(false, authorizationMessage(value));
                         setGuideVisible(true);
@@ -226,16 +254,21 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override public void onError(Exception e) {
-                runOnUiThread(() -> setLoading(false, "连接管理平台失败：" + friendlyError(e)));
+                runOnUiThread(() -> { if(isCurrent(generation)) setLoading(false, "连接管理平台失败：" + friendlyError(e)); });
             }
         });
     }
 
     private void fetchChannels() {
+        final int generation = requestGeneration;
         setLoading(true, "正在获取频道…");
         api.loadChannels(serverUrl, deviceId, new ApiClient.Callback<>() {
             @Override public void onSuccess(List<Channel> value) {
                 runOnUiThread(() -> {
+                    if (!isCurrent(generation)) return;
+                    String lastKey = currentIndex >= 0 && currentIndex < allChannels.size()
+                        ? channelKey(allChannels.get(currentIndex)) : getSharedPreferences(PREFS, MODE_PRIVATE).getString("last_channel", "");
+                    currentIndex = -1;
                     allChannels.clear();
                     allChannels.addAll(value);
                     rebuildGroups();
@@ -243,18 +276,17 @@ public class MainActivity extends AppCompatActivity {
                     setLoading(false, value.isEmpty() ? "服务器还没有可播放的频道" : "");
                     if (!value.isEmpty()) {
                         Channel pending = null;
-                        for (Channel channel : value) if (channel.id == pendingChannelId) { pending = channel; break; }
+                        for (Channel channel : value) if (channelKey(channel).equals(lastKey)) { pending = channel; break; }
                         if (pending != null) play(pending);
                         else {
-                            setGuideVisible(true);
-                            channelList.post(() -> channelList.requestFocus());
+                            play(value.get(0));
                         }
                     }
                 });
             }
 
             @Override public void onError(Exception e) {
-                runOnUiThread(() -> setLoading(false, "频道加载失败：" + friendlyError(e)));
+                runOnUiThread(() -> { if(isCurrent(generation)) setLoading(false, "频道加载失败：" + friendlyError(e)); });
             }
         });
     }
@@ -286,20 +318,28 @@ public class MainActivity extends AppCompatActivity {
 
     private void buildPlayerScreen() {
         releasePlayer();
+        touchControls = null;
         root.removeAllViews();
 
         player = new ExoPlayer.Builder(this).build();
         player.addListener(new Player.Listener() {
             @Override public void onPlaybackStateChanged(int state) {
-                if (state == Player.STATE_BUFFERING) setStatus("正在缓冲…");
-                else if (state == Player.STATE_READY) setStatus("");
+                handler.removeCallbacks(bufferingTimeout);
+                if (state == Player.STATE_BUFFERING) {
+                    setStatus("正在连接，请稍候…");
+                    handler.postDelayed(bufferingTimeout, 20000);
+                }
+                else if (state == Player.STATE_READY) {
+                    retryCount = 0;
+                    handler.removeCallbacks(retryPlayback);
+                    setStatus("");
+                }
                 else if (state == Player.STATE_ENDED) setStatus("节目已结束");
             }
 
             @Override public void onPlayerError(@NonNull PlaybackException error) {
                 if (tryNextSource(true)) return;
-                setStatus("播放失败，按确认键重试");
-                setGuideVisible(true);
+                scheduleRetry();
             }
         });
 
@@ -313,6 +353,7 @@ public class MainActivity extends AppCompatActivity {
 
         buildInfoPanel();
         buildGuidePanel();
+        if (phoneUi) buildTouchControls();
 
         loading = new ProgressBar(this);
         FrameLayout.LayoutParams loadingParams = new FrameLayout.LayoutParams(dp(54), dp(54), Gravity.CENTER);
@@ -337,7 +378,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void buildGuidePanel() {
-        compactUi = getResources().getConfiguration().smallestScreenWidthDp < 600;
+        compactUi = phoneUi && getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT;
         guidePanel = new LinearLayout(this);
         guidePanel.setOrientation(LinearLayout.VERTICAL);
         int panelPadding = dp(compactUi ? 12 : 24);
@@ -373,7 +414,7 @@ public class MainActivity extends AppCompatActivity {
         lists.addView(channelList, channelsParams);
         guidePanel.addView(lists, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
-        TextView footer = text("↑↓ 选择   ←→ 切换区域   OK 播放   菜单键显示频道   数字键选台", 14, MUTED, false);
+        TextView footer = text(phoneUi ? "点击频道播放 · 长按频道收藏" : "上下选台 · 确认播放 · 长按确认收藏 · 返回看电视", 17, MUTED, false);
         LinearLayout.LayoutParams footerParams = matchWidthWrap();
         footerParams.setMargins(0, dp(12), 0, 0);
         guidePanel.addView(footer, footerParams);
@@ -384,7 +425,9 @@ public class MainActivity extends AppCompatActivity {
         channelList.setAdapter(channelAdapter);
 
         refresh.setOnClickListener(v -> loadChannels(false));
-        settings.setOnClickListener(v -> showConfigScreen(null));
+        settings.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("服务器设置")
+            .setMessage("更换服务器会暂时停止播放。是否继续？")
+            .setNegativeButton("继续看电视", null).setPositiveButton("打开设置", (d,w)->showConfigScreen(null)).show());
         int panelWidth = compactUi ? ViewGroup.LayoutParams.MATCH_PARENT
             : Math.min(dp(860), getResources().getDisplayMetrics().widthPixels);
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(panelWidth, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START);
@@ -397,6 +440,7 @@ public class MainActivity extends AppCompatActivity {
         for (Channel channel : allChannels) unique.add(channel.group);
         groups.clear();
         groups.add("全部频道");
+        groups.add("我的收藏");
         groups.addAll(unique);
         if (!groups.contains(selectedGroup)) selectedGroup = "全部频道";
         if (groupAdapter != null) groupAdapter.notifyDataSetChanged();
@@ -406,16 +450,20 @@ public class MainActivity extends AppCompatActivity {
         selectedGroup = group;
         visibleChannels.clear();
         for (Channel channel : allChannels) {
-            if ("全部频道".equals(group) || group.equals(channel.group)) visibleChannels.add(channel);
+            if ("全部频道".equals(group) || group.equals(channel.group) || ("我的收藏".equals(group) && isFavorite(channel))) visibleChannels.add(channel);
         }
         if (channelAdapter != null) channelAdapter.notifyDataSetChanged();
         if (groupAdapter != null) groupAdapter.notifyDataSetChanged();
     }
 
     private void play(Channel channel) {
+        handler.removeCallbacks(retryPlayback);
+        handler.removeCallbacks(bufferingTimeout);
+        retryCount = 0;
         int index = allChannels.indexOf(channel);
         if (index >= 0) currentIndex = index;
         sourceAttempts = 0;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("last_channel", channelKey(channel)).apply();
         updateChannelTitle(channel);
         epgText.setText("正在获取节目单…");
         setStatus("正在连接频道…");
@@ -426,6 +474,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startChannelSource(Channel channel) {
+        if (player == null) return;
         player.setMediaItem(MediaItem.fromUri(channel.currentUrl()));
         player.prepare();
         player.play();
@@ -455,14 +504,14 @@ public class MainActivity extends AppCompatActivity {
         api.loadEpg(serverUrl, channel.name, new ApiClient.Callback<>() {
             @Override public void onSuccess(JSONObject root) {
                 runOnUiThread(() -> {
-                    if (currentIndex < 0 || allChannels.get(currentIndex).id != channel.id) return;
+                    if (isDestroyed() || player == null || currentIndex < 0 || currentIndex >= allChannels.size() || allChannels.get(currentIndex) != channel) return;
                     epgText.setText(formatEpg(root));
                 });
             }
 
             @Override public void onError(Exception error) {
                 runOnUiThread(() -> {
-                    if (currentIndex >= 0 && allChannels.get(currentIndex).id == channel.id) epgText.setText("暂无节目单");
+                    if (!isDestroyed() && player != null && currentIndex >= 0 && currentIndex < allChannels.size() && allChannels.get(currentIndex) == channel) epgText.setText("暂无节目单");
                 });
             }
         });
@@ -503,6 +552,7 @@ public class MainActivity extends AppCompatActivity {
     private void setGuideVisible(boolean visible) {
         guideVisible = visible;
         if (guidePanel != null) guidePanel.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (touchControls != null) touchControls.setVisibility(visible ? View.GONE : View.VISIBLE);
         if (infoPanel != null) infoPanel.setVisibility(View.VISIBLE);
         handler.removeCallbacks(hideGuide);
         if (visible && channelList != null) channelList.post(() -> channelList.requestFocus());
@@ -559,6 +609,8 @@ public class MainActivity extends AppCompatActivity {
             case KeyEvent.KEYCODE_DPAD_RIGHT:
                 if (!tryNextSource(false)) Toast.makeText(this, "当前频道只有一条线路", Toast.LENGTH_SHORT).show();
                 return true;
+            case KeyEvent.KEYCODE_BOOKMARK:
+                toggleFavorite(); return true;
             default: return super.dispatchKeyEvent(event);
         }
     }
@@ -575,7 +627,7 @@ public class MainActivity extends AppCompatActivity {
 
     private String friendlyError(Exception e) {
         String message = e.getMessage();
-        if (message == null || message.isBlank()) return "网络不可用";
+        if (message == null || message.trim().isEmpty()) return "网络不可用";
         if (message.contains("timed out")) return "连接超时，请检查地址和网络";
         if (message.contains("Unable to resolve host")) return "找不到服务器，请检查地址";
         if (message.contains("Connection refused")) return "服务器拒绝连接，请检查端口";
@@ -589,6 +641,7 @@ public class MainActivity extends AppCompatActivity {
         button.setTextColor(Color.WHITE);
         button.setAllCaps(false);
         button.setFocusable(true);
+        button.setFocusableInTouchMode(true);
         button.setBackground(rounded(CARD, 10));
         button.setOnFocusChangeListener((v, focused) -> v.setBackground(rounded(focused ? ACCENT : CARD, 10)));
         return button;
@@ -620,7 +673,7 @@ public class MainActivity extends AppCompatActivity {
         class Holder extends RecyclerView.ViewHolder { Holder(TextView item) { super(item); } }
 
         @NonNull @Override public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            TextView item = text("", 18, Color.WHITE, false);
+            TextView item = text("", phoneUi ? 20 : 24, Color.WHITE, false);
             item.setFocusable(true);
             item.setClickable(true);
             item.setPadding(dp(18), 0, dp(16), 0);
@@ -648,7 +701,7 @@ public class MainActivity extends AppCompatActivity {
             TextView item = (TextView) holder.itemView;
             String group = groups.get(position);
             int count = 0;
-            for (Channel channel : allChannels) if (position == 0 || group.equals(channel.group)) count++;
+            for (Channel channel : allChannels) if (position == 0 || group.equals(channel.group) || ("我的收藏".equals(group) && isFavorite(channel))) count++;
             item.setText(group + "  " + count);
             item.setSelected(group.equals(selectedGroup));
             styleItem(item, item.hasFocus(), item.isSelected());
@@ -676,6 +729,13 @@ public class MainActivity extends AppCompatActivity {
             item.setSelected(number - 1 == currentIndex);
             styleItem(item, item.hasFocus(), item.isSelected());
             item.setOnClickListener(v -> play(channel));
+            item.setOnLongClickListener(v -> {
+                boolean favorite = !isFavorite(channel);
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("fav:" + channelKey(channel), favorite).apply();
+                filterChannels(selectedGroup);
+                Toast.makeText(MainActivity.this, favorite ? "已加入我的收藏" : "已取消收藏", Toast.LENGTH_SHORT).show();
+                return true;
+            });
             item.setOnKeyListener((v, keyCode, event) -> {
                 if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                     groupList.requestFocus(); return true;
@@ -687,6 +747,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void releasePlayer() {
         handler.removeCallbacksAndMessages(null);
+        if (playerView != null) playerView.setPlayer(null);
         if (player != null) {
             player.release();
             player = null;
@@ -695,6 +756,8 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onStop() {
         super.onStop();
+        handler.removeCallbacks(retryPlayback);
+        handler.removeCallbacks(bufferingTimeout);
         if (player != null) player.pause();
     }
 
@@ -709,8 +772,49 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override protected void onDestroy() {
+        requestGeneration++;
         releasePlayer();
         api.shutdown();
         super.onDestroy();
+    }
+
+    private boolean isCurrent(int generation) { return generation == requestGeneration && !isFinishing() && !isDestroyed(); }
+    private String channelKey(Channel channel) { return serverUrl + "|" + channel.group + "|" + channel.name; }
+    private boolean isFavorite(Channel channel) { return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("fav:" + channelKey(channel), false); }
+    private void toggleFavorite() {
+        if (currentIndex < 0 || currentIndex >= allChannels.size()) return;
+        Channel channel = allChannels.get(currentIndex);
+        boolean favorite = !isFavorite(channel);
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("fav:" + channelKey(channel), favorite).apply();
+        filterChannels(selectedGroup);
+        Toast.makeText(this, favorite ? "已加入我的收藏" : "已取消收藏", Toast.LENGTH_SHORT).show();
+    }
+    private void scheduleRetry() {
+        handler.removeCallbacks(retryPlayback);
+        handler.removeCallbacks(bufferingTimeout);
+        if (++retryCount > 3) {
+            setStatus("暂时无法播放，请换个频道或打开频道列表重试");
+            setGuideVisible(true);
+            return;
+        }
+        setStatus("信号暂时中断，正在自动重连（" + retryCount + "/3）…");
+        handler.postDelayed(retryPlayback, retryCount * 3000L);
+    }
+    private void buildTouchControls() {
+        touchControls = new LinearLayout(this);
+        touchControls.setPadding(dp(12), dp(8), dp(12), dp(24));
+        touchControls.setBackgroundColor(Color.argb(220,7,10,15));
+        String[] labels = {"上一台", "频道", "收藏", "下一台"};
+        for (int i=0;i<labels.length;i++) {
+            final int action=i;
+            Button control=button(labels[i]);
+            control.setTextSize(15);
+            LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(0,dp(54),1);
+            params.setMargins(dp(3),0,dp(3),0);
+            touchControls.addView(control,params);
+            control.setOnClickListener(v->{if(action==0)changeChannel(-1);else if(action==1)setGuideVisible(true);else if(action==2)toggleFavorite();else changeChannel(1);});
+        }
+        root.addView(touchControls,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));
+        touchControls.setVisibility(View.GONE);
     }
 }
