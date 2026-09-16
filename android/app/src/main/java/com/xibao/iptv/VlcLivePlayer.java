@@ -25,7 +25,8 @@ final class VlcLivePlayer implements LiveCompatibilityPlayer {
     private boolean closed;
 
     VlcLivePlayer(Context context) {
-        library = new LibVLC(context, Arrays.asList("--no-video-title-show", "--network-caching=1500"));
+        // LibVLC appends device-specific options to this list during construction.
+        library = new LibVLC(context, new java.util.ArrayList<>(Arrays.asList("--no-video-title-show", "--network-caching=1500")));
         player = new MediaPlayer(library);
         // Decode audio to PCM instead of relying on HDMI compressed-audio support.
         player.setAudioOutput("audiotrack");
