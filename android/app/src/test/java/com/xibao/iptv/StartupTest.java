@@ -13,6 +13,8 @@ import android.widget.TextView;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {28, 35})
 public class StartupTest {
+    @org.junit.Before public void phoneHardware(){ org.robolectric.Shadows.shadowOf(org.robolectric.RuntimeEnvironment.getApplication().getPackageManager()).setSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN,true); }
+
     @Test public void freshInstallOpensConfiguration() {
         try (var controller = Robolectric.buildActivity(MainActivity.class).setup()) {
             assertNotNull(controller.get().findViewById(android.R.id.content));

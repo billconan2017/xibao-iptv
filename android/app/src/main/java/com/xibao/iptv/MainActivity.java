@@ -99,6 +99,17 @@ public class MainActivity extends AppCompatActivity {
     private TextView epgTime;
     private JSONArray currentPrograms = new JSONArray();
     private TextView guideStatus;
+    private TextView mobileTitle;
+    private Button phoneGuideAction;
+    private Button phonePauseButton;
+    private boolean resumePlayback;
+    private boolean phoneControlsVisible = true;
+    private int phoneLayoutWidth = -1, phoneLayoutHeight = -1;
+    private AlertDialog programmeDialog;
+    private final Runnable hidePhoneControls = () -> {
+        phoneControlsVisible=false;
+        updatePhoneChrome();
+    };
     private LinearLayout navigation;
     private boolean vodMode = false, activeScreen = false, accessGranted = false;
     private VodBrowser vodBrowser;
@@ -135,9 +146,13 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        phoneUi = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_TYPE_MASK) != Configuration.UI_MODE_TYPE_TELEVISION;
+        phoneUi = shouldUsePhoneUi();
         root = new FrameLayout(this);
         root.setBackgroundColor(BG);
+        if(phoneUi)setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
+        root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{
+            if(phoneUi && player!=null)layoutPhone();
+        });
         setContentView(root);
         hideSystemUi();
         if (savedInstanceState != null) pendingChannelId = savedInstanceState.getLong("channel_id", -1);
@@ -172,10 +187,21 @@ public class MainActivity extends AppCompatActivity {
         api.setCredentials(deviceId,token);
     }
 
+    private boolean shouldUsePhoneUi(){
+        String mode=getSharedPreferences(PREFS,MODE_PRIVATE).getString("interface_mode","auto");
+        if("tv".equals(mode))return false;
+        if("phone".equals(mode))return true;
+        android.content.pm.PackageManager hardware=getPackageManager();
+        return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_TYPE_MASK) != Configuration.UI_MODE_TYPE_TELEVISION
+            && !hardware.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+            && !hardware.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TELEVISION)
+            && hardware.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN);
+    }
+
     private void hideSystemUi() {
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         WindowInsetsControllerCompat bars=WindowCompat.getInsetsController(getWindow(),root);
-        if(phoneUi) {
+        if(phoneUi && getResources().getConfiguration().orientation != Configuration.ORIENTATION_LANDSCAPE) {
             getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN);
             bars.show(WindowInsetsCompat.Type.systemBars());
             bars.setAppearanceLightStatusBars(false);
@@ -186,7 +212,8 @@ public class MainActivity extends AppCompatActivity {
         }
         ViewCompat.setOnApplyWindowInsetsListener(root,(view,insets)->{
             androidx.core.graphics.Insets safe=insets.getInsets(WindowInsetsCompat.Type.systemBars()|WindowInsetsCompat.Type.displayCutout());
-            view.setPadding(safe.left,safe.top,safe.right,safe.bottom);return insets;
+            view.setPadding(safe.left,safe.top,safe.right,safe.bottom);
+            if(phoneUi)view.post(()->{phoneLayoutWidth=-1;layoutPhone();});return insets;
         });
         ViewCompat.requestApplyInsets(root);
     }
@@ -234,8 +261,20 @@ public class MainActivity extends AppCompatActivity {
         hintParams.setMargins(0, dp(10), 0, dp(18));
         card.addView(hint, hintParams);
 
+        TextView modeLabel=text("界面模式 · 盒子识别不正确时可手动切换",phoneUi?12:16,MUTED,false);
+        card.addView(modeLabel,matchWidthWrap());
+        android.widget.Spinner interfaceMode=new android.widget.Spinner(this);
+        interfaceMode.setPopupBackgroundDrawable(rounded(CARD,8));
+        interfaceMode.setAdapter(new android.widget.ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"自动识别","手机触控","电视遥控"}){
+            @Override public View getView(int position,View convert,ViewGroup parent){TextView view=(TextView)super.getView(position,convert,parent);view.setTextColor(Color.WHITE);view.setTextSize(phoneUi?14:18);return view;}
+            @Override public View getDropDownView(int position,View convert,ViewGroup parent){TextView view=(TextView)super.getDropDownView(position,convert,parent);view.setTextColor(Color.WHITE);view.setTextSize(phoneUi?14:18);view.setMinHeight(dp(48));return view;}
+        });
+        String savedMode=getSharedPreferences(PREFS,MODE_PRIVATE).getString("interface_mode","auto");
+        interfaceMode.setSelection("tv".equals(savedMode)?2:"phone".equals(savedMode)?1:0);
+        LinearLayout.LayoutParams modeParams=new LinearLayout.LayoutParams(-1,dp(48));modeParams.bottomMargin=dp(12);card.addView(interfaceMode,modeParams);
+
         Button connect = button("连接服务器");
-        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(62));
+        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(phoneUi?48:62));
         card.addView(connect, buttonParams);
 
         TextView message = text(error == null ? "" : error, 14, Color.rgb(255, 118, 118), false);
@@ -255,7 +294,11 @@ public class MainActivity extends AppCompatActivity {
                         runOnUiThread(() -> {
                             if (!isCurrent(generation)) return;
                             serverUrl = candidate;
-                            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_SERVER, serverUrl).apply();
+                            String mode=interfaceMode.getSelectedItemPosition()==2?"tv":interfaceMode.getSelectedItemPosition()==1?"phone":"auto";
+                            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_SERVER, serverUrl).putString("interface_mode",mode).apply();
+                            phoneUi=shouldUsePhoneUi();
+                            setRequestedOrientation(phoneUi?ActivityInfo.SCREEN_ORIENTATION_FULL_USER:ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                            hideSystemUi();
                             loadChannels(true);
                         });
                     }
@@ -373,14 +416,18 @@ public class MainActivity extends AppCompatActivity {
 
     private void buildPlayerScreen() {
         releasePlayer();
+        phoneLayoutWidth=-1;phoneLayoutHeight=-1;phoneControlsVisible=true;
         touchControls = null;
         navigation = null;
         vodMode = false;
         compactUi = phoneUi && getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT;
         root.removeAllViews();
 
-        player = new ExoPlayer.Builder(this).build();
+        player = new ExoPlayer.Builder(this, new androidx.media3.exoplayer.DefaultRenderersFactory(this).setEnableDecoderFallback(true)).build();
         player.addListener(new Player.Listener() {
+            @Override public void onIsPlayingChanged(boolean playing) {
+                if(phonePauseButton!=null)phonePauseButton.setText(playing?"暂停":"播放");
+            }
             @Override public void onPlaybackStateChanged(int state) {
                 handler.removeCallbacks(bufferingTimeout);
                 if (state == Player.STATE_BUFFERING) {
@@ -407,15 +454,22 @@ public class MainActivity extends AppCompatActivity {
         playerView.setUseController(false);
         playerView.setKeepScreenOn(true);
         playerView.setBackgroundColor(Color.BLACK);
-        playerView.setOnClickListener(v -> {if(!vodMode)setGuideVisible(!guideVisible);});
+        playerView.setOnClickListener(v -> {
+            if(vodMode)return;
+            if(phoneUi){if(guideVisible && !compactUi)setGuideVisible(false);else showPhoneControls(!phoneControlsVisible);}
+            else setGuideVisible(!guideVisible);
+        });
+        if(phoneUi)playerView.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener)visibility->{
+            if(vodMode){phoneControlsVisible=visibility==View.VISIBLE;updatePhoneChrome();}
+        });
         FrameLayout.LayoutParams videoParams=match();
         if(compactUi) {videoParams.height=(getResources().getDisplayMetrics().widthPixels-dp(24))*9/16;videoParams.topMargin=dp(70);videoParams.leftMargin=dp(12);videoParams.rightMargin=dp(12);}
         root.addView(playerView, videoParams);
 
         buildInfoPanel();
         buildGuidePanel();
-        buildNavigation();
-        if (phoneUi) buildTouchControls();
+        if(phoneUi){buildPhoneNavigation();buildTouchControls();root.post(this::layoutPhone);}
+        else buildNavigation();
         handler.postDelayed(epgTicker,30000);
         handler.postDelayed(heartbeat,60000);
 
@@ -427,19 +481,21 @@ public class MainActivity extends AppCompatActivity {
     private void buildInfoPanel() {
         infoPanel = new LinearLayout(this);
         infoPanel.setOrientation(LinearLayout.VERTICAL);
-        infoPanel.setPadding(dp(compactUi ? 20:34), dp(18), dp(compactUi ? 20:34), dp(20));
+        infoPanel.setPadding(dp(phoneUi ? 16:34), dp(phoneUi ? 8:18), dp(phoneUi ? 16:34), dp(phoneUi ? 8:20));
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
             new int[]{Color.argb(230, 5, 8, 12), Color.TRANSPARENT});
         infoPanel.setBackground(bg);
-        channelTitle = text("请选择频道", compactUi ? 23:29, Color.WHITE, true);
-        epgText = text("方向键浏览 · 确认键播放 · 数字键快速选台", 16, MUTED, false);
-        statusText = text("", 15, ACCENT, false);
+        channelTitle = text("请选择频道", phoneUi ? 16:29, Color.WHITE, true);
+        epgText = text(phoneUi ? "选择频道开始播放" : "方向键浏览 · 确认键播放 · 数字键快速选台", phoneUi ? 12:16, MUTED, false);
+        statusText = text("", phoneUi ? 12:15, ACCENT, false);
+        if(phoneUi){channelTitle.setSingleLine(true);channelTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);epgText.setMaxLines(2);epgText.setEllipsize(android.text.TextUtils.TruncateAt.END);}
         infoPanel.addView(channelTitle, matchWidthWrap());
         infoPanel.addView(epgText, matchWidthWrap());
-        epgTime=text("节目单由管理平台的 EPG 源提供",14,MUTED,false);
+        epgTime=text("节目单由管理平台的 EPG 源提供",phoneUi ? 11:14,MUTED,false);
+        if(phoneUi)epgTime.setSingleLine(true);
         epgProgress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);epgProgress.setMax(1000);
         epgProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(ACCENT));
-        LinearLayout.LayoutParams progressParams=new LinearLayout.LayoutParams(-1,dp(6));progressParams.setMargins(0,dp(14),0,dp(8));
+        LinearLayout.LayoutParams progressParams=new LinearLayout.LayoutParams(-1,dp(6));progressParams.setMargins(0,dp(phoneUi?5:14),0,dp(phoneUi?3:8));
         infoPanel.addView(epgProgress,progressParams);infoPanel.addView(epgTime,matchWidthWrap());
         infoPanel.addView(statusText, matchWidthWrap());
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
@@ -449,21 +505,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void buildGuidePanel() {
-        compactUi = phoneUi && getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT;
+        if(!phoneUi)compactUi=false;
         guidePanel = new LinearLayout(this);
         guidePanel.setOrientation(LinearLayout.VERTICAL);
-        int panelPadding = dp(compactUi ? 12 : 24);
-        guidePanel.setPadding(panelPadding, dp(compactUi ? 10 : 22), panelPadding, dp(compactUi ? 10 : 20));
+        int panelPadding = dp(phoneUi ? 12 : 24);
+        guidePanel.setPadding(panelPadding, dp(phoneUi ? 6 : 22), panelPadding, dp(phoneUi ? 0 : 20));
         guidePanel.setBackground(rounded(Color.argb(244, 12, 17, 24), 0));
 
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = text(compactUi ? "喜宝 TV" : "直播频道", compactUi ? 21 : 26, Color.WHITE, true);
-        header.addView(title, new LinearLayout.LayoutParams(0, dp(56), 1));
+        TextView title = text(phoneUi ? "频道" : "直播频道", phoneUi ? 15 : 26, Color.WHITE, true);
+        header.addView(title, new LinearLayout.LayoutParams(0, dp(phoneUi?44:56), 1));
         Button refresh = button("刷新");
-        Button settings = button("服务器");
-        LinearLayout.LayoutParams smallButton = new LinearLayout.LayoutParams(dp(compactUi ? 88 : 120), dp(50));
+        Button settings = button(phoneUi ? "收起" : "服务器");
+        if(phoneUi)phoneGuideAction=settings;
+        LinearLayout.LayoutParams smallButton = new LinearLayout.LayoutParams(dp(phoneUi ? 56 : 120), dp(phoneUi?44:50));
         smallButton.setMargins(dp(10), 0, 0, 0);
+        if(phoneUi){refresh.setTextSize(12);settings.setTextSize(12);}
         header.addView(refresh, smallButton);
         header.addView(settings, smallButton);
         guidePanel.addView(header, matchWidthWrap());
@@ -471,26 +529,26 @@ public class MainActivity extends AppCompatActivity {
         guidePanel.addView(guideStatus,matchWidthWrap());
 
         LinearLayout lists = new LinearLayout(this);
-        lists.setOrientation(compactUi ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
+        lists.setOrientation(phoneUi ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
         groupList = new RecyclerView(this);
         groupList.setLayoutManager(new LinearLayoutManager(this,
-            compactUi ? RecyclerView.HORIZONTAL : RecyclerView.VERTICAL, false));
+            phoneUi ? RecyclerView.HORIZONTAL : RecyclerView.VERTICAL, false));
         channelList = new RecyclerView(this);
         channelList.setLayoutManager(new LinearLayoutManager(this));
-        lists.addView(groupList, compactUi
-            ? new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(72))
+        lists.addView(groupList, phoneUi
+            ? new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(phoneUi?44:72))
             : new LinearLayout.LayoutParams(dp(245), ViewGroup.LayoutParams.MATCH_PARENT));
-        LinearLayout.LayoutParams channelsParams = compactUi
+        LinearLayout.LayoutParams channelsParams = phoneUi
             ? new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1)
             : new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
-        channelsParams.setMargins(compactUi ? 0 : dp(18), compactUi ? dp(10) : 0, 0, 0);
+        channelsParams.setMargins(phoneUi ? 0 : dp(18), phoneUi ? dp(4) : 0, 0, 0);
         lists.addView(channelList, channelsParams);
         guidePanel.addView(lists, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
         TextView footer = text(phoneUi ? "点击频道播放 · 长按频道收藏" : "上下选台 · 确认播放 · 长按确认收藏 · 返回看电视", 17, MUTED, false);
         LinearLayout.LayoutParams footerParams = matchWidthWrap();
         footerParams.setMargins(0, dp(12), 0, 0);
-        guidePanel.addView(footer, footerParams);
+        if(!phoneUi)guidePanel.addView(footer, footerParams);
 
         groupAdapter = new GroupAdapter();
         channelAdapter = new ChannelAdapter();
@@ -498,9 +556,9 @@ public class MainActivity extends AppCompatActivity {
         channelList.setAdapter(channelAdapter);
 
         refresh.setOnClickListener(v -> loadChannels(false));
-        settings.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("服务器设置")
+        settings.setOnClickListener(v -> {if(phoneUi){if(compactUi)showPrograms();else setGuideVisible(false);return;}new AlertDialog.Builder(this).setTitle("服务器设置")
             .setMessage("更换服务器会暂时停止播放。是否继续？")
-            .setNegativeButton("继续看电视", null).setPositiveButton("打开设置", (d,w)->showConfigScreen(null)).show());
+            .setNegativeButton("继续看电视", null).setPositiveButton("打开设置", (d,w)->showConfigScreen(null)).show();});
         int panelWidth = compactUi ? ViewGroup.LayoutParams.MATCH_PARENT
             : Math.min(dp(860), getResources().getDisplayMetrics().widthPixels);
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(panelWidth, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START);
@@ -561,7 +619,8 @@ public class MainActivity extends AppCompatActivity {
     private void updateChannelTitle(Channel channel) {
         String source = channel.sources.size() > 1
             ? String.format(Locale.CHINA, "    线路 %d/%d", channel.sourceIndex + 1, channel.sources.size()) : "";
-        channelTitle.setText(String.format(Locale.CHINA, "%03d  %s%s", currentIndex + 1, channel.name, source));
+        channelTitle.setText(phoneUi ? channel.name+source : String.format(Locale.CHINA, "%03d  %s%s", currentIndex + 1, channel.name, source));
+        if(mobileTitle!=null)mobileTitle.setText(channel.name);
     }
 
     private boolean tryNextSource(boolean automatic) {
@@ -633,7 +692,15 @@ public class MainActivity extends AppCompatActivity {
 
     private void setGuideVisible(boolean visible) {
         guideVisible = visible;
+        if(phoneUi){
+            guideVisible=visible && !compactUi;
+            if(guideVisible)handler.removeCallbacks(hidePhoneControls);
+            else showPhoneControls(true);
+            updatePhoneChrome();
+            return;
+        }
         if (guidePanel != null) guidePanel.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if(navigation!=null)navigation.setVisibility(visible?View.VISIBLE:View.GONE);
         if (touchControls != null) touchControls.setVisibility(visible || vodMode ? View.GONE : View.VISIBLE);
         if (infoPanel != null) infoPanel.setVisibility(View.VISIBLE);
         handler.removeCallbacks(hideGuide);
@@ -643,7 +710,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void scheduleInfoHide() {
-        if(compactUi)return;
+        if(phoneUi)return;
         handler.removeCallbacks(hideGuide);
         handler.postDelayed(() -> {
             if (!compactUi && !guideVisible && infoPanel != null && statusText.getText().length() == 0) infoPanel.setVisibility(View.GONE);
@@ -660,6 +727,7 @@ public class MainActivity extends AppCompatActivity {
         if (statusText == null) return;
         statusText.setText(message);
         if(guideStatus!=null){guideStatus.setText(message);guideStatus.setVisibility(message.isEmpty()?View.GONE:View.VISIBLE);}
+        if(phoneUi){updatePhoneChrome();return;}
         if (!message.isEmpty()) infoPanel.setVisibility(View.VISIBLE); else scheduleInfoHide();
     }
 
@@ -721,13 +789,14 @@ public class MainActivity extends AppCompatActivity {
     private Button button(String label) {
         Button button = new Button(this);
         button.setText(label);
-        button.setTextSize(16);
+        button.setTextSize(phoneUi?13:16);
+        button.setMinWidth(0);button.setMinimumWidth(0);button.setPadding(dp(6),0,dp(6),0);
         button.setTextColor(Color.WHITE);
         button.setAllCaps(false);
         button.setFocusable(true);
-        button.setFocusableInTouchMode(true);
+        button.setFocusableInTouchMode(!phoneUi);
         button.setBackground(rounded(CARD, 10));
-        button.setOnFocusChangeListener((v, focused) -> v.setBackground(rounded(focused ? ACCENT : CARD, 10)));
+        button.setOnFocusChangeListener((v, focused) -> {v.setBackground(rounded(focused ? ACCENT : CARD, 10));((Button)v).setTextColor(focused?BG:Color.WHITE);});
         return button;
     }
 
@@ -757,13 +826,13 @@ public class MainActivity extends AppCompatActivity {
         class Holder extends RecyclerView.ViewHolder { Holder(TextView item) { super(item); } }
 
         @NonNull @Override public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            TextView item = text("", phoneUi ? 20 : 24, Color.WHITE, false);
+            TextView item = text("", phoneUi ? 14 : 24, Color.WHITE, false);
             item.setFocusable(true);
             item.setClickable(true);
             item.setPadding(dp(18), 0, dp(16), 0);
             item.setSingleLine(true);
             item.setOnFocusChangeListener((v, focused) -> styleItem((TextView) v, focused, v.isSelected()));
-            item.setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(62)));
+            item.setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(phoneUi?48:62)));
             return new Holder(item);
         }
 
@@ -776,7 +845,7 @@ public class MainActivity extends AppCompatActivity {
     private final class GroupAdapter extends TextAdapter {
         @NonNull @Override public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
             Holder holder = super.onCreateViewHolder(parent, viewType);
-            if (compactUi) holder.itemView.setLayoutParams(new RecyclerView.LayoutParams(dp(170), dp(62)));
+            if (phoneUi) holder.itemView.setLayoutParams(new RecyclerView.LayoutParams(dp(116), dp(40)));
             return holder;
         }
 
@@ -830,6 +899,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void releasePlayer() {
+        if(programmeDialog!=null){programmeDialog.dismiss();programmeDialog=null;}
         if(vodBrowser!=null){vodBrowser.close();vodBrowser=null;}
         handler.removeCallbacksAndMessages(null);
         if (playerView != null) playerView.setPlayer(null);
@@ -846,13 +916,13 @@ public class MainActivity extends AppCompatActivity {
         handler.removeCallbacks(heartbeat);
         handler.removeCallbacks(retryPlayback);
         handler.removeCallbacks(bufferingTimeout);
-        if (player != null) player.pause();
+        if (player != null) {resumePlayback=player.getPlayWhenReady();player.pause();}
     }
 
     @Override protected void onStart() {
         super.onStart();
         activeScreen=true;
-        if (player != null) { if(accessGranted && (currentIndex>=0 || vodMode))player.play(); handler.removeCallbacks(epgTicker);handler.post(epgTicker);handler.removeCallbacks(heartbeat);handler.post(heartbeat); }
+        if (player != null) { if(resumePlayback && accessGranted && (currentIndex>=0 || vodMode))player.play(); handler.removeCallbacks(epgTicker);handler.post(epgTicker);handler.removeCallbacks(heartbeat);handler.post(heartbeat); }
     }
 
     @Override protected void onSaveInstanceState(@NonNull Bundle outState) {
@@ -891,27 +961,88 @@ public class MainActivity extends AppCompatActivity {
         handler.postDelayed(retryPlayback, retryCount * 3000L);
     }
     private void buildTouchControls() {
-        touchControls = new LinearLayout(this);
-        touchControls.setPadding(dp(12), dp(8), dp(12), dp(8));
-        touchControls.setBackgroundColor(Color.argb(220,7,10,15));
-        String[] labels = {"上一台", "频道", "收藏", "下一台"};
-        for (int i=0;i<labels.length;i++) {
-            final int action=i;
-            Button control=button(labels[i]);
-            control.setTextSize(15);
-            LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(0,dp(54),1);
-            params.setMargins(dp(3),0,dp(3),0);
-            touchControls.addView(control,params);
-            control.setOnClickListener(v->{if(action==0)changeChannel(-1);else if(action==1){if(vodMode)openVod();else setGuideVisible(true);}else if(action==2)toggleFavorite();else changeChannel(1);});
+        touchControls=new LinearLayout(this);touchControls.setGravity(Gravity.CENTER_VERTICAL);
+        touchControls.setPadding(dp(8),0,dp(8),0);
+        touchControls.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{Color.TRANSPARENT,Color.argb(220,0,0,0)}));
+        String[] labels={"上一台","暂停","下一台","频道","节目单"};
+        for(int i=0;i<labels.length;i++){
+            final int action=i;Button control=button(labels[i]);control.setTextSize(12);control.setBackgroundColor(Color.TRANSPARENT);
+            if(i==1)phonePauseButton=control;
+            touchControls.addView(control,new LinearLayout.LayoutParams(0,dp(48),1));
+            control.setOnClickListener(v->{
+                if(action==0)changeChannel(-1);
+                else if(action==1){if(!accessGranted)return;if(player.isPlaying()){player.pause();control.setText("播放");}else{player.play();control.setText("暂停");}}
+                else if(action==2)changeChannel(1);
+                else if(action==3)setGuideVisible(true);
+                else showPrograms();
+                if(action<3)showPhoneControls(true);
+            });
         }
-        root.addView(touchControls,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));
-        touchControls.setVisibility(View.GONE);
+        root.addView(touchControls,new FrameLayout.LayoutParams(-1,dp(48),Gravity.BOTTOM));
+    }
+
+    private void buildPhoneNavigation(){
+        navigation=new LinearLayout(this);navigation.setGravity(Gravity.CENTER_VERTICAL);navigation.setPadding(dp(8),0,dp(8),0);
+        Button back=button("‹");back.setTextSize(26);back.setContentDescription("返回");back.setBackgroundColor(Color.TRANSPARENT);
+        navigation.addView(back,new LinearLayout.LayoutParams(dp(48),dp(48)));
+        back.setOnClickListener(v->getOnBackPressedDispatcher().onBackPressed());
+        mobileTitle=text("喜宝 TV",15,Color.WHITE,true);mobileTitle.setSingleLine(true);mobileTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        navigation.addView(mobileTitle,new LinearLayout.LayoutParams(0,dp(48),1));
+        Button more=button("⋮");more.setTextSize(24);more.setContentDescription("更多选项");more.setBackgroundColor(Color.TRANSPARENT);
+        navigation.addView(more,new LinearLayout.LayoutParams(dp(48),dp(48)));
+        more.setOnClickListener(v->{
+            handler.removeCallbacks(hidePhoneControls);
+            android.widget.PopupMenu menu=new android.widget.PopupMenu(this,more);
+            String[] items={"节目单","收藏当前频道","点播","刷新频道","服务器设置","退出应用"};
+            for(int i=0;i<items.length;i++)menu.getMenu().add(0,i,i,items[i]);
+            menu.setOnMenuItemClickListener(item->{switch(item.getItemId()){
+                case 0:showPrograms();break;case 1:toggleFavorite();break;case 2:openVod();break;
+                case 3:loadChannels(false);break;case 4:showConfigScreen(null);break;case 5:confirmExit();break;
+            }return true;});
+            menu.setOnDismissListener(m->showPhoneControls(true));menu.show();
+        });
+        root.addView(navigation,new FrameLayout.LayoutParams(-1,dp(48),Gravity.TOP));
+    }
+
+    private void showPhoneControls(boolean visible){
+        phoneControlsVisible=visible;handler.removeCallbacks(hidePhoneControls);updatePhoneChrome();
+        if(visible && !guideVisible)handler.postDelayed(hidePhoneControls,3500);
+    }
+
+    private void updatePhoneChrome(){
+        if(!phoneUi || player==null || navigation==null)return;
+        boolean sheet=guideVisible && !compactUi;
+        navigation.setVisibility(compactUi || (phoneControlsVisible && !sheet)?View.VISIBLE:View.GONE);
+        if(touchControls!=null)touchControls.setVisibility(!vodMode && phoneControlsVisible && !sheet?View.VISIBLE:View.GONE);
+        if(guidePanel!=null)guidePanel.setVisibility(!vodMode && (compactUi || sheet)?View.VISIBLE:View.GONE);
+        if(infoPanel!=null)infoPanel.setVisibility(compactUi?View.VISIBLE:View.GONE);
+    }
+
+    private void layoutPhone(){
+        if(!phoneUi || player==null || navigation==null || root.getWidth()==0)return;
+        int width=root.getWidth()-root.getPaddingLeft()-root.getPaddingRight();
+        int height=root.getHeight()-root.getPaddingTop()-root.getPaddingBottom();
+        if(width==phoneLayoutWidth && height==phoneLayoutHeight)return;
+        boolean wasCompact=compactUi;
+        phoneLayoutWidth=width;phoneLayoutHeight=height;compactUi=height>=width;
+        int videoHeight=compactUi?width*9/16:height;
+        FrameLayout.LayoutParams video=new FrameLayout.LayoutParams(-1,videoHeight,Gravity.TOP);video.topMargin=compactUi?dp(48):0;playerView.setLayoutParams(video);
+        FrameLayout.LayoutParams info=new FrameLayout.LayoutParams(-1,dp(112),Gravity.TOP);info.topMargin=dp(48)+videoHeight;infoPanel.setLayoutParams(info);infoPanel.setBackgroundColor(BG);
+        FrameLayout.LayoutParams guide=new FrameLayout.LayoutParams(compactUi?-1:Math.min(dp(360),width*2/3),-1,compactUi?Gravity.TOP:Gravity.END);
+        guide.topMargin=compactUi?info.topMargin+dp(112):0;guidePanel.setLayoutParams(guide);
+        FrameLayout.LayoutParams controls=new FrameLayout.LayoutParams(-1,dp(48),Gravity.TOP);controls.topMargin=(compactUi?dp(48):0)+videoHeight-dp(48);touchControls.setLayoutParams(controls);
+        navigation.setBackgroundColor(compactUi?BG:Color.argb(160,0,0,0));
+        phoneGuideAction.setText(compactUi?"节目单":"关闭");
+        if(wasCompact && !compactUi && accessGranted)guideVisible=false;
+        if(compactUi)guideVisible=false;
+        else if(!accessGranted)guideVisible=true;
+        showPhoneControls(true);
     }
 
     private void buildNavigation() {
         navigation=new LinearLayout(this);navigation.setGravity(Gravity.CENTER_VERTICAL);
         navigation.setPadding(dp(10),dp(8),dp(10),dp(8));navigation.setBackgroundColor(BG);
-        String[] labels={"返回","节目单","点播",phoneUi?"横/竖屏":"收藏","退出"};
+        String[] labels={"返回","节目单","点播","收藏","退出"};
         for(int i=0;i<labels.length;i++) {
             final int action=i;Button control=button(labels[i]);control.setTextSize(phoneUi?13:17);
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(48),1);lp.setMargins(dp(2),0,dp(2),0);
@@ -920,7 +1051,7 @@ public class MainActivity extends AppCompatActivity {
                 if(action==0){if(vodMode)showVodExit();else if(guideVisible)setGuideVisible(false);else setGuideVisible(true);}
                 else if(action==1)showPrograms();
                 else if(action==2)openVod();
-                else if(action==3){if(phoneUi)setRequestedOrientation(compactUi?ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);else toggleFavorite();}
+                else if(action==3){toggleFavorite();}
                 else confirmExit();
             });
         }
@@ -945,6 +1076,7 @@ public class MainActivity extends AppCompatActivity {
         epgTime.setText(time.format(new Date(start*1000))+" — "+time.format(new Date(end*1000))+"    已播 "+progress/10+"% · 约剩 "+Math.max(1,(end-now)/60)+" 分钟");
     }
     private void showPrograms() {
+        if(phoneUi && !vodMode){showPhonePrograms();return;}
         if(vodMode){Toast.makeText(this,"点播进度可在视频控制条上查看和拖动",Toast.LENGTH_LONG).show();playerView.showController();return;}
         ArrayList<String> items=new ArrayList<>();SimpleDateFormat time=new SimpleDateFormat("MM-dd HH:mm",Locale.CHINA);
         for(int i=0;i<currentPrograms.length();i++){JSONObject p=currentPrograms.optJSONObject(i);if(p!=null)items.add(time.format(new Date(p.optLong("start_time")*1000))+"  "+p.optString("title"));}
@@ -970,15 +1102,30 @@ public class MainActivity extends AppCompatActivity {
     }
     @Override public void onConfigurationChanged(@NonNull Configuration config) {
         super.onConfigurationChanged(config);hideSystemUi();
+        if(programmeDialog!=null){programmeDialog.dismiss();programmeDialog=null;}
         if(player==null){showConfigScreen(null);return;}
-        compactUi=phoneUi && config.orientation==Configuration.ORIENTATION_PORTRAIT;
-        FrameLayout.LayoutParams video=match();
-        if(compactUi){video.height=(getResources().getDisplayMetrics().widthPixels-dp(24))*9/16;video.topMargin=dp(70);video.leftMargin=dp(12);video.rightMargin=dp(12);}
-        playerView.setLayoutParams(video);
-        FrameLayout.LayoutParams info=new FrameLayout.LayoutParams(-1,-2,Gravity.TOP);
-        info.topMargin=compactUi?dp(90)+video.height:dp(64);
-        if(compactUi){info.leftMargin=dp(12);info.rightMargin=dp(12);}
-        infoPanel.setLayoutParams(info);channelTitle.setTextSize(compactUi?23:29);
-        boolean visible=guideVisible;String status=statusText.getText().toString();root.removeView(guidePanel);buildGuidePanel();setStatus(status);setGuideVisible(visible);
+        if(phoneUi){phoneLayoutWidth=-1;root.post(this::layoutPhone);return;}
+    }
+
+    private void showPhonePrograms(){
+        if(programmeDialog!=null)programmeDialog.dismiss();
+        LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setPadding(dp(16),dp(12),dp(16),dp(12));
+        TextView heading=text("节目单",16,Color.WHITE,true);body.addView(heading,matchWidthWrap());
+        ScrollView scroll=new ScrollView(this);LinearLayout rows=new LinearLayout(this);rows.setOrientation(LinearLayout.VERTICAL);scroll.addView(rows);
+        body.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        SimpleDateFormat time=new SimpleDateFormat("HH:mm",Locale.CHINA);long now=System.currentTimeMillis()/1000;
+        if(currentPrograms.length()==0){TextView empty=text("暂无节目数据，请在管理平台同步 EPG。",14,MUTED,false);empty.setPadding(0,dp(16),0,dp(16));rows.addView(empty);}
+        for(int i=0;i<currentPrograms.length();i++){
+            JSONObject p=currentPrograms.optJSONObject(i);if(p==null)continue;
+            boolean current=p.optLong("start_time")<=now && now<p.optLong("end_time");
+            TextView row=text(time.format(new Date(p.optLong("start_time")*1000))+" — "+time.format(new Date(p.optLong("end_time")*1000))+(current?"  · 正在播":"")+"\n"+p.optString("title"),14,current?ACCENT:Color.WHITE,current);
+            row.setPadding(dp(12),dp(10),dp(12),dp(10));row.setBackground(rounded(current?CARD:PANEL,8));
+            LinearLayout.LayoutParams lp=matchWidthWrap();lp.bottomMargin=dp(4);rows.addView(row,lp);
+        }
+        Button close=button("关闭");body.addView(close,new LinearLayout.LayoutParams(-1,dp(48)));
+        programmeDialog=new AlertDialog.Builder(this).setView(body).create();close.setOnClickListener(v->programmeDialog.dismiss());
+        programmeDialog.show();programmeDialog.getWindow().setBackgroundDrawable(rounded(PANEL,16));
+        int width=root.getWidth()-root.getPaddingLeft()-root.getPaddingRight(),height=root.getHeight()-root.getPaddingTop()-root.getPaddingBottom();
+        programmeDialog.getWindow().setLayout(Math.min(dp(420),width-dp(24)),(int)(height*.8));
     }
 }
